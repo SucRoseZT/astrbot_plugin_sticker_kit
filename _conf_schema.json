@@ -1,0 +1,80 @@
+{
+  "llm_api_base": {
+    "description": "打标用 LLM API 地址（OpenAI 兼容，填到 /v1 为止，如 https://api.deepseek.com/v1）；留空则不自动打标",
+    "type": "string",
+    "default": ""
+  },
+  "llm_api_key": {
+    "description": "打标用 LLM API Key",
+    "type": "string",
+    "default": ""
+  },
+  "llm_model": {
+    "description": "打标用模型名（需支持图片输入，如 gemini-2.5-flash / glm-4.5v / qwen-vl-max）",
+    "type": "string",
+    "default": ""
+  },
+  "protocol_mode": {
+    "description": "快速通道：AI 在回复末尾输出 <sticker> 标签即可自动配图（本地检索选图，一次回复就带图，不再多轮工具调用，速度快省 token）",
+    "type": "bool",
+    "default": true
+  },
+  "delivery_mode": {
+    "description": "投递方式：separate_after=正文先发、表情包再单独发一条（推荐，和陪伴插件一致）；same_message=表情包跟在正文同一条消息里",
+    "type": "string",
+    "options": [
+      "separate_after",
+      "same_message"
+    ],
+    "default": "separate_after"
+  },
+  "image_format": {
+    "description": "发送格式：image=普通图片（兼容所有平台）；qq_emoji=QQ 表情格式（仅 OneBot/aiocqhttp 平台生效，观感更接近原生表情包）",
+    "type": "string",
+    "options": [
+      "image",
+      "qq_emoji"
+    ],
+    "default": "image"
+  },
+  "admin_only": {
+    "description": "仅管理员可触发表情包相关 LLM 工具",
+    "type": "bool",
+    "default": true
+  },
+  "enable_send": {
+    "description": "开启 AI 发送表情包（sticker_pick）",
+    "type": "bool",
+    "default": true
+  },
+  "enable_search": {
+    "description": "开启 AI 检索表情包（sticker_search / sticker_list）",
+    "type": "bool",
+    "default": true
+  },
+  "top_k": {
+    "description": "检索时给 AI 的候选数量",
+    "type": "int",
+    "default": 6
+  },
+  "send_cooldown_seconds": {
+    "description": "发送冷却（秒），同一会话两次发送的最小间隔",
+    "type": "int",
+    "default": 30
+  },
+  "send_probability": {
+    "description": "快速通道发送概率（0~1）：AI 输出表情标签时按此概率实际发图，未命中只发文字不消耗冷却",
+    "type": "float",
+    "default": 0.9
+  },
+  "write_lock_seconds": {
+    "description": "发送成功后全局锁（秒）：锁定期内所有表情包工具直接拒绝，让 AI 用文字汇报即可，防止反复调用",
+    "type": "int",
+    "default": 60
+  },
+  "max_image_mb": {
+    "description": "单张表情包大小上限（MB）",
+    "type": "int",
+    "default": 10
+  }
+}
