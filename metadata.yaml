@@ -3,4 +3,6 @@ display_name: "蔗糖的表情包小屋~"
 desc: 独立表情包库：WebUI 面板上传、LLM 视觉自动打标、快速通道一次回复即配图、可选 QQ 表情格式
 version: 1.1.0
 author: SucRoseZT
-repo: local
+repo: https://github.com/SucRoseZT/astrbot_plugin_sticker_kit
+tags:
+  - astrbot
