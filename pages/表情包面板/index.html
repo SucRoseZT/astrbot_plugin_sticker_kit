@@ -15,18 +15,28 @@
   }
   @keyframes bgflow { 0%{background-position:0% 50%} 50%{background-position:100% 50%} 100%{background-position:0% 50%} }
   h1 { font-size:18px; font-weight:600; letter-spacing:.5px; margin-bottom:4px; color:#e2568a; text-shadow:0 1px 0 #fff; }
-  .sub { color:var(--dim); font-size:12px; margin-bottom:18px; }
+  .sub { color:var(--dim); font-size:12px; margin-bottom:4px; }
   .sub b { color:var(--ok); } .sub i { color:var(--bad); font-style:normal; }
+  #pathline { color:var(--dim); font-size:11px; margin-bottom:14px; word-break:break-all; user-select:text; }
+  #pathline code { color:var(--ok); background:#ffffffa0; padding:0 5px; border-radius:5px; font-family:Consolas,monospace; }
   #drop { border:1.5px dashed var(--line); border-radius:10px; padding:28px; text-align:center; color:var(--dim); cursor:pointer; transition:.2s; margin-bottom:20px; background:#ffffffa8; }
   #drop.hover, #drop:hover { border-color:var(--acc); color:#e2568a; background:#ffffffd9; }
   #drop input { display:none; }
-  .bar { display:flex; gap:10px; align-items:center; margin-bottom:14px; flex-wrap:wrap; }
+  body.dragging::after {
+    content:'松手即可上传'; position:fixed; inset:0; z-index:50; pointer-events:none;
+    background:#ff7fa922; border:3px dashed var(--acc);
+    display:flex; align-items:center; justify-content:center; font-size:22px; font-weight:600; color:#e2568a;
+  }
+  .bar { display:flex; gap:10px; align-items:center; margin-bottom:10px; flex-wrap:wrap; }
   .bar input[type=text] { background:#ffffffcc; border:1px solid var(--line); color:var(--text); border-radius:8px; padding:7px 12px; width:240px; outline:none; transition:.15s; }
   .bar input:focus { border-color:var(--acc); box-shadow:0 0 0 3px #ff7fa933; }
   .btn { background:#ffffffd9; color:var(--text); border:1px solid var(--line); border-radius:8px; padding:6px 14px; cursor:pointer; font-size:13px; transition:.15s; }
   .btn:hover { border-color:var(--acc); color:#e2568a; transform:translateY(-1px); }
   .btn.warn { color:var(--bad); }
   .btn.ok { color:var(--ok); }
+  .chipf { padding:4px 12px; }
+  .chipf.active { border-color:var(--acc); background:var(--acc); color:#fff; }
+  .chipf .n { opacity:.75; font-size:11px; margin-left:2px; }
   .count { color:var(--dim); font-size:12px; }
   #grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); gap:14px; }
   .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; overflow:hidden; display:flex; flex-direction:column; transition:.18s; box-shadow:0 2px 10px #ffb6c933; }
@@ -44,25 +54,59 @@
   .row { display:flex; gap:6px; margin-top:auto; padding-top:6px; }
   .row .btn { padding:3px 10px; font-size:12px; flex:0 0 auto; }
   .err { color:var(--bad); font-size:11px; }
-  #toast { position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:#fff; border:1px solid var(--acc2); color:var(--text); padding:8px 20px; border-radius:10px; display:none; z-index:9; box-shadow:0 4px 16px #ff9fbd44; }
+  #toast { position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:#fff; border:1px solid var(--acc2); color:var(--text); padding:8px 20px; border-radius:10px; display:none; z-index:9; box-shadow:0 4px 16px #ff9fbd44; max-width:80vw; }
   .empty { color:var(--dim); text-align:center; padding:60px 0; grid-column:1/-1; }
+  #askMask { position:fixed; inset:0; background:#5a3a4866; display:none; align-items:center; justify-content:center; z-index:99; }
+  #askMask.act { display:flex; }
+  .ask { background:#fffdfa; border:1px solid var(--line); border-radius:12px; padding:20px 24px; width:min(340px, 88vw); box-shadow:0 10px 30px #ff9fbd66; }
+  .askT { font-weight:600; margin-bottom:6px; color:#e2568a; }
+  .askD { font-size:12px; color:var(--dim); margin-bottom:16px; }
+  .askBtns { display:flex; gap:10px; justify-content:flex-end; }
+  #hostNote { display:none; color:var(--dim); font-size:11px; margin:-8px 0 16px 2px; }
+  #hostNote a { color:var(--dim); text-decoration:underline; cursor:pointer; text-underline-offset:2px; }
+  #hostNote a:hover { color:#e2568a; }
+  .bar input.dir { flex:1 1 260px; min-width:200px; width:auto; }
 </style>
 </head>
 <body>
 <h1>蔗糖的表情包小屋~</h1>
 <div class="sub" id="status">加载中…</div>
-<div id="drop">拖拽图片到此处，或点击选择文件（支持 gif/png/jpg/webp，可多选）<input type="file" id="file" multiple accept=".jpg,.jpeg,.png,.gif,.webp"></div>
+<div id="pathline"></div>
+<div id="drop">点击选择文件（支持 gif/png/jpg/webp，可多选）<br>截图后直接 Ctrl+V 粘贴也行<input type="file" id="file" multiple accept=".jpg,.jpeg,.png,.gif,.webp"></div>
+<div id="hostNote">桌面端窗口里系统拖拽会被宿主壳拦截，<a id="openBrowser">在浏览器中打开面板（拖拽可用）</a></div>
+<div class="bar">
+  <input type="text" id="dirpath" class="dir" placeholder="批量导入兜底：粘贴本地文件夹路径，如 D:\表情包\收藏">
+  <button class="btn" id="importDir">导入文件夹</button>
+</div>
 <div class="bar">
   <input type="text" id="q" placeholder="搜索 名称/标签/描述…">
   <button class="btn" id="reload">刷新</button>
   <span class="count" id="count"></span>
 </div>
+<div class="bar" id="filters">
+  <button class="btn chipf active" data-f="all">全部<span class="n"></span></button>
+  <button class="btn chipf warn" data-f="failed">失败<span class="n"></span></button>
+  <button class="btn chipf" data-f="none">未打标<span class="n"></span></button>
+  <button class="btn chipf" data-f="pending">打标中<span class="n"></span></button>
+  <button class="btn chipf ok" data-f="complete">完成<span class="n"></span></button>
+  <button class="btn warn" id="retryAll" style="display:none">重试所有失败</button>
+</div>
 <div id="grid"><div class="empty">加载中…</div></div>
 <div id="toast"></div>
+<div id="askMask"><div class="ask">
+  <div class="askT" id="askTitle"></div>
+  <div class="askD" id="askDetail"></div>
+  <div class="askBtns">
+    <button class="btn" id="askCancel">取消</button>
+    <button class="btn warn" id="askOk">删除</button>
+  </div>
+</div></div>
 <script>
 const $ = s => document.querySelector(s);
 const API = '/api/plug/astrbot_plugin_sticker_kit';
 let ITEMS = [];
+let FILTER = 'all';
+const STATUS_TXT = { complete:'完成', pending:'打标中', failed:'失败', none:'未打标' };
 
 async function bridge() {
   for (let i = 0; i < 40; i++) {
@@ -101,6 +145,26 @@ function toast(msg, bad) {
   t._h = setTimeout(() => t.style.display = 'none', 2600);
 }
 
+/* 桌面端 webview 沙箱禁掉了 window.confirm（直接返回 false，点了像没反应），自己画一个 */
+function askConfirm(title, detail) {
+  return new Promise((resolve) => {
+    const mask = $('#askMask');
+    $('#askTitle').textContent = title;
+    $('#askDetail').textContent = detail || '';
+    mask.classList.add('act');
+    const done = (ok) => {
+      mask.classList.remove('act');
+      $('#askOk').onclick = null;
+      $('#askCancel').onclick = null;
+      mask.onclick = null;
+      resolve(ok);
+    };
+    $('#askOk').onclick = () => done(true);
+    $('#askCancel').onclick = () => done(false);
+    mask.onclick = (e) => { if (e.target === mask) done(false); };
+  });
+}
+
 async function load() {
   $('#grid').innerHTML = '<div class="empty">加载中…</div>';
   try {
@@ -109,6 +173,9 @@ async function load() {
     $('#status').innerHTML = d.llm_ready
       ? '打标 LLM：<b>已配置</b>（上传后自动打标）'
       : '打标 LLM：<i>未配置</i>（插件配置里填 llm_api_base / llm_api_key / llm_model 后可自动打标）';
+    if (d.data_dir) {
+      $('#pathline').innerHTML = '数据保存在：<code>' + esc(d.data_dir) + '</code>　标注在 index.json，图片在 images/ 子目录　·　卡片上的「保存」= 把改好的标注写进 index.json，图片本身上传时就已存到 images/';
+    }
     render();
   } catch (e) {
     $('#grid').innerHTML = '<div class="empty">加载失败：' + esc(e.message || e) + '</div>';
@@ -127,19 +194,67 @@ async function thumbSrc(it) {
   return API + '/api/image?id=' + it.id;
 }
 
+async function downloadImage(it) {
+  try {
+    toast('正在取图…');
+    let src = await thumbSrc(it);
+    if (!src) { toast('取图失败', true); return; }
+    const name = (it.name || it.id).replace(/[\\/:*?"<>|]/g, '_') + extOf(it);
+    if (src.startsWith('data:')) {
+      const a = document.createElement('a');
+      a.href = src; a.download = name; a.click();
+    } else {
+      const r = await fetch(src);
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = name; a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 3000);
+    }
+    toast('已下载原图：' + name);
+  } catch (e) {
+    toast('下载失败：' + (e.message || e), true);
+  }
+}
+
+function extOf(it) {
+  const m = { 'image/gif':'.gif', 'image/png':'.png', 'image/webp':'.webp', 'image/jpeg':'.jpg' };
+  return m[it.mime] || '.jpg';
+}
+
 function render() {
   const q = $('#q').value.trim().toLowerCase();
-  const list = ITEMS.filter(it => !q || [it.name, (it.tags||[]).join(' '), it.description, (it.emotions||[]).join(' ')].join(' ').toLowerCase().includes(q));
-  $('#count').textContent = `共 ${ITEMS.length} 张${q ? '，匹配 ' + list.length : ''}`;
+  const stOf = it => it.analysis_status || 'none';
+  const list = ITEMS.filter(it =>
+    (FILTER === 'all' || stOf(it) === FILTER) &&
+    (!q || [it.name, (it.tags||[]).join(' '), it.description, (it.emotions||[]).join(' '), it.visible_text||''].join(' ').toLowerCase().includes(q))
+  );
+  const cnt = {};
+  for (const it of ITEMS) { const s = stOf(it); cnt[s] = (cnt[s]||0) + 1; }
+  document.querySelectorAll('.chipf').forEach(c => {
+    const f = c.dataset.f;
+    c.querySelector('.n').textContent = f === 'all' ? ITEMS.length : (cnt[f] || 0);
+  });
+  $('#retryAll').style.display = (cnt.failed || 0) > 0 ? '' : 'none';
+  let head = `共 ${ITEMS.length} 张`;
+  if (FILTER !== 'all') head = `${STATUS_TXT[FILTER]} ${list.length} 张 / 共 ${ITEMS.length} 张`;
+  if (q) head += `，匹配 ${list.length}`;
+  $('#count').textContent = head;
   const grid = $('#grid');
-  if (!list.length) { grid.innerHTML = '<div class="empty">没有表情包，先上传几张吧</div>'; return; }
+  if (!list.length) {
+    grid.innerHTML = FILTER === 'failed' && !q
+      ? '<div class="empty">没有失败的，都是好孩子~</div>'
+      : '<div class="empty">' + (ITEMS.length ? '没有匹配的表情包' : '没有表情包，先上传几张吧') + '</div>';
+    return;
+  }
   grid.innerHTML = '';
   for (const it of list) {
+    const st = stOf(it);
     const card = document.createElement('div');
     card.className = 'card';
     card.innerHTML = `
       <div class="thumb"><img alt="" loading="lazy">
-        <span class="badge ${it.analysis_status||'none'}">${it.analysis_status||'none'}</span></div>
+        <span class="badge ${st}">${STATUS_TXT[st] || st}</span></div>
       <div class="meta">
         <input class="f name" value="${esc(it.name||'')}" placeholder="名称">
         <input class="f emo" value="${esc((it.emotions||[]).join('、'))}" placeholder="情绪（顿号分隔）">
@@ -150,6 +265,7 @@ function render() {
         <div class="row">
           <button class="btn ok save">保存</button>
           <button class="btn re">重打标</button>
+          <button class="btn dl">下载</button>
           <button class="btn warn del">删除</button>
           <span class="count" style="margin-left:auto">${it.usage_count||0}次</span>
         </div>
@@ -161,8 +277,10 @@ function render() {
       catch (e) { toast(e.message || '失败', true); }
       load();
     };
+    card.querySelector('.dl').onclick = () => downloadImage(it);
     card.querySelector('.del').onclick = async () => {
-      if (!confirm('确定删除「' + (it.name||'') + '」？不可恢复')) return;
+      const ok = await askConfirm('删除「' + (it.name||'') + '」？', '图片文件和标注会一起删掉，不可恢复。');
+      if (!ok) return;
       try { await apiPost('api/delete', {id: it.id}); toast('已删除'); }
       catch (e) { toast(e.message || '失败', true); }
       load();
@@ -183,19 +301,107 @@ async function save(it, card) {
     description: val(card.querySelector('.desc')),
     visible_text: val(card.querySelector('.vtext')),
   };
-  try { await apiPost('api/update', body); toast('已保存'); }
+  try { await apiPost('api/update', body); toast('已保存到库（index.json）'); }
   catch (e) { toast(e.message||'失败', true); }
   load();
 }
 
+document.querySelectorAll('.chipf').forEach(c => {
+  c.onclick = () => {
+    FILTER = c.dataset.f;
+    document.querySelectorAll('.chipf').forEach(x => x.classList.remove('active'));
+    c.classList.add('active');
+    render();
+  };
+});
+
+$('#retryAll').onclick = async () => {
+  const bad = ITEMS.filter(it => (it.analysis_status || 'none') === 'failed');
+  if (!bad.length) { toast('没有失败需要重试'); return; }
+  toast(`正在重新打标 ${bad.length} 张（排队依次来）…`);
+  for (const it of bad) {
+    try { await apiPost('api/analyze', { id: it.id }); } catch (e) {}
+  }
+  toast('已全部重新排队打标');
+  load();
+};
+
 const drop = $('#drop');
 drop.onclick = () => $('#file').click();
-$('#file').onchange = e => upload([...e.target.files]);
-drop.ondragover = e => { e.preventDefault(); drop.classList.add('hover'); };
-drop.ondragleave = () => drop.classList.remove('hover');
-drop.ondrop = e => { e.preventDefault(); drop.classList.add('hover'); drop.classList.remove('hover'); upload([...e.dataTransfer.files]); };
+$('#file').onchange = e => { upload([...e.target.files]); e.target.value = ''; };
+
+/* ---------- 拖拽上传：全页接管 ----------
+   不在 document 级 preventDefault 的话，webview 会把拖进来的图当导航打开（面板直接被图片顶掉），
+   这就是"拖拽没用"的根因。接管后拖到页面任意位置都能上传。 */
+const IMG_OK = f => !!f && (((f.type || '').startsWith('image/')) || /\.(jpe?g|png|gif|webp)$/i.test(f.name || ''));
+
+let dragDepth = 0;
+['dragenter', 'dragover'].forEach(t => document.addEventListener(t, e => {
+  e.preventDefault();
+  if (t === 'dragenter') dragDepth++;
+  document.body.classList.add('dragging');
+}));
+document.addEventListener('dragleave', () => {
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (!dragDepth) document.body.classList.remove('dragging');
+});
+document.addEventListener('drop', async e => {
+  e.preventDefault();
+  dragDepth = 0;
+  document.body.classList.remove('dragging');
+  const files = await filesFromDrop(e);
+  const imgs = files.filter(IMG_OK);
+  if (imgs.length) upload(imgs);
+  else if (files.length) toast('拖进来的文件里没有支持的图片格式（gif/png/jpg/webp）', true);
+  else toast('没拿到文件：这个窗口可能拦截了拖拽，试试点虚线框选文件，或把图片 Ctrl+V 粘贴进来', true);
+});
+
+async function filesFromDrop(e) {
+  const dt = e.dataTransfer;
+  if (!dt) return [];
+  let files = [...(dt.files || [])];
+  if (files.length) return files;
+  /* 部分宿主/拖文件夹时 files 为空，用 items 的 entry API 递归读 */
+  const entries = [...(dt.items || [])]
+    .map(i => { try { return i.webkitGetAsEntry && i.webkitGetAsEntry(); } catch (_) { return null; } })
+    .filter(Boolean);
+  if (!entries.length) return [];
+  files = [];
+  for (const en of entries) files.push(...await walkEntry(en));
+  return files;
+}
+
+function walkEntry(entry) {
+  return new Promise(resolve => {
+    if (!entry) return resolve([]);
+    if (entry.isFile) { entry.file(f => resolve([f]), () => resolve([])); return; }
+    if (entry.isDirectory) {
+      const reader = entry.createReader();
+      const out = [];
+      const readBatch = () => reader.readEntries(async batch => {
+        if (!batch.length) {
+          const all = [];
+          for (const en of out) all.push(...await walkEntry(en));
+          return resolve(all);
+        }
+        out.push(...batch);
+        readBatch();
+      }, () => resolve([]));
+      readBatch();
+      return;
+    }
+    resolve([]);
+  });
+}
+
+/* 粘贴兜底：截图 / 复制的图片直接 Ctrl+V 就传 */
+document.addEventListener('paste', e => {
+  const files = [...((e.clipboardData && e.clipboardData.files) || [])].filter(f => (f.type || '').startsWith('image/'));
+  if (files.length) { e.preventDefault(); upload(files); }
+});
 
 async function upload(files) {
+  files = (files || []).filter(IMG_OK);
   if (!files.length) return;
   toast('上传中…');
   try {
@@ -209,6 +415,7 @@ async function upload(files) {
         d.saved += part.saved || (part.saved_one ? 1 : 0);
         (part.duplicated || []).forEach(x => d.duplicated.push(x));
         (part.rejected || []).forEach(x => d.rejected.push(x));
+        if (part.llm_ready === false) d.llm_ready = false;
       }
     } else {
       const fd = new FormData();
@@ -216,9 +423,10 @@ async function upload(files) {
       d = await apiPost('api/upload', fd) || {};
       if (d instanceof FormData || !d.saved && !d.duplicated && !d.rejected) throw new Error('上传返回异常');
     }
-    let msg = `成功 ${d.saved} 张`;
+    let msg = `成功 ${d.saved} 张（已存到 images/ 目录）`;
     if ((d.duplicated||[]).length) msg += `，重复跳过 ${d.duplicated.length} 张`;
     if ((d.rejected||[]).length) msg += `，拒绝 ${d.rejected.length} 张（${d.rejected[0]}）`;
+    if (d.llm_ready === false) msg += `；打标 LLM 未配置，稍后可在插件配置里填好再逐张「重打标」`;
     toast(msg, (d.saved||0) === 0);
     load();
   } catch (e) {
@@ -228,6 +436,46 @@ async function upload(files) {
 
 $('#q').oninput = render;
 $('#reload').onclick = load;
+
+/* ---------- 宿主拖拽受限的出路 ---------- */
+try {
+  if (window.self !== window.top) $('#hostNote').style.display = 'block';
+} catch (_) { $('#hostNote').style.display = 'block'; }
+
+$('#openBrowser').onclick = async () => {
+  let ok = false;
+  try {
+    const r = await fetch(API + '/api/list', { credentials: 'include' });
+    ok = r.ok;
+  } catch (_) {}
+  if (ok) {
+    window.open(location.href, '_blank');
+    toast('已在浏览器新标签页打开，把图片拖进去就能传');
+  } else {
+    window.open(location.origin, '_blank');
+    toast('浏览器还没登录 WebUI：已打开 WebUI 首页，登录后再回来点一次', true);
+  }
+};
+
+$('#importDir').onclick = async () => {
+  const p = $('#dirpath').value.trim();
+  if (!p) { toast('先填文件夹路径', true); return; }
+  toast('扫描中…');
+  try {
+    const d = await apiPost('api/import_dir', { path: p });
+    let msg = `导入 ${d.saved} 张（递归含子目录）`;
+    if (d.duplicated_total) msg += `，重复跳过 ${d.duplicated_total}`;
+    if (d.rejected_total) msg += `，拒绝 ${d.rejected_total}`;
+    if (d.truncated) msg += `；目录太大，只取前 ${d.scanned} 张`;
+    toast(msg, d.saved === 0);
+    if (d.saved) $('#dirpath').value = '';
+    load();
+  } catch (e) {
+    toast(e.message || '导入失败', true);
+  }
+};
+$('#dirpath').onkeydown = e => { if (e.key === 'Enter') $('#importDir').click(); };
+
 load();
 </script>
 </body>

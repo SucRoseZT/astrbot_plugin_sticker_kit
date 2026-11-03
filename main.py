@@ -146,6 +146,14 @@ def _json_candidates(frag: str):
         s = s[:cut] if cut == i_comma else s[: cut + 1]
 
 
+class _RateLimited(RuntimeError):
+    """上游 429/503：服务端限流或过载，需要全局冷却而非普通重试。"""
+
+    def __init__(self, message: str, retry_after: float = 0.0):
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
 class StickerKit(Star):
     _SEND_FIELDS = ("sticker_send", "sticker_search", "sticker_list")
 
@@ -164,6 +172,18 @@ class StickerKit(Star):
         self._write_lock_until = 0.0
         self._last_send: dict[str, float] = {}
         self._analysis_tasks: dict[str, asyncio.Task] = {}
+        try:
+            llm_conc = max(1, int(self.config.get("llm_concurrency", 2) or 2))
+        except (TypeError, ValueError):
+            llm_conc = 2
+        self._llm_sem = asyncio.Semaphore(llm_conc)
+        try:
+            self._llm_min_interval = max(0.0, float(self.config.get("llm_min_interval", 1.0) or 0))
+        except (TypeError, ValueError):
+            self._llm_min_interval = 1.0
+        self._llm_gate_lock = asyncio.Lock()
+        self._llm_next_slot = 0.0
+        self._llm_cooldown_until = 0.0
         self._register_panel()
 
     # ---------- 存储 ----------
@@ -173,6 +193,17 @@ class StickerKit(Star):
             self._items = json.loads(self._index_path.read_text(encoding="utf-8"))
         except Exception:
             self._items = []
+        stuck = 0
+        for it in self._items:
+            if it.get("analysis_status") == "pending":
+                it["analysis_status"] = "none"
+                stuck += 1
+        if stuck:
+            logger.info(f"[StickerKit] 重置 {stuck} 条上次被打断的 pending 打标状态")
+            try:
+                self._save_index()
+            except Exception:
+                pass
 
     def _save_index(self) -> None:
         tmp = self._index_path.with_suffix(".tmp")
@@ -486,8 +517,11 @@ class StickerKit(Star):
         send = self.config.get("enable_send", True)
         if send and self.config.get("admin_only", True) and not event.is_admin():
             send = False
+            logger.info("[StickerKit] 快速通道跳过(静默拦截已记录)：非管理员消息")
         if send and self._cooldown_hit(event):
+            remain = float(self.config.get("send_cooldown_seconds", 30) or 0) - (_now() - self._last_send.get(event.unified_msg_origin, 0))
             send = False
+            logger.info(f"[StickerKit] 快速通道跳过：会话冷却中(剩 {remain:.0f}s) session={event.unified_msg_origin[:60]}")
         if send and not self._probability_hit():
             send = False
             logger.info("[StickerKit] 快速通道概率未命中，本次仅发文字")
@@ -595,7 +629,7 @@ class StickerKit(Star):
             total = len(self._items)
             analyzing = sum(1 for it in self._items if it.get("analysis_status") == "pending")
             yield event.plain_result(
-                f"StickerKit v1.1.0：库存 {total} 张（本次启动迁移自陪伴插件 {self._migrated} 张），"
+                f"StickerKit v1.2.1：库存 {total} 张（本次启动迁移自陪伴插件 {self._migrated} 张），"
                 f"打标中 {analyzing}，快速通道={'开' if self.config.get('protocol_mode', True) else '关'}，"
                 f"概率={float(self.config.get('send_probability', 1.0)):.0%}，"
                 f"投递={self.config.get('delivery_mode', 'separate_after')}，格式={self.config.get('image_format', 'image')}，"
@@ -618,12 +652,26 @@ class StickerKit(Star):
         base, key, model = self._llm_conf()
         if not (base and key and model):
             return
+        async with self._llm_sem:
+            await self._analyze_item_locked(item, base, key, model)
+
+    async def _llm_gate(self) -> None:
+        """全局节流闸：保证相邻两次打标请求的发出间隔 >= llm_min_interval，
+        并在 429/503 冷却期内让整个队列暂停。持锁等待使请求在锁上自然排队。"""
+        async with self._llm_gate_lock:
+            delay = max(self._llm_next_slot, self._llm_cooldown_until) - _now()
+            if delay > 0:
+                await asyncio.sleep(delay)
+            self._llm_next_slot = _now() + self._llm_min_interval
+
+    async def _analyze_item_locked(self, item: dict, base: str, key: str, model: str) -> None:
         path = self._img_dir / item["stored_name"]
         try:
             raw = path.read_bytes()
         except Exception as exc:
             item["analysis_status"] = "failed"
             item["analysis_error"] = f"读取失败 {exc}"[:200]
+            self._save_index()
             return
         mime = item.get("mime") or mimetypes.guess_type(str(path))[0] or "image/jpeg"
         data_url = f"data:{mime};base64,{base64.b64encode(raw).decode()}"
@@ -643,9 +691,15 @@ class StickerKit(Star):
         headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
 
         async def _call_once() -> dict:
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=120)) as session:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=180)) as session:
                 async with session.post(f"{base}/chat/completions", json=payload, headers=headers) as resp:
                     text = await resp.text()
+                    if resp.status in (429, 503):
+                        try:
+                            retry_after = float(resp.headers.get("Retry-After") or 0)
+                        except (TypeError, ValueError):
+                            retry_after = 0.0
+                        raise _RateLimited(f"HTTP {resp.status}: {text[:150]}", retry_after)
                     if resp.status != 200:
                         raise RuntimeError(f"HTTP {resp.status}: {text[:200]}")
                     content = json.loads(text)["choices"][0]["message"]["content"]
@@ -669,18 +723,29 @@ class StickerKit(Star):
                 raise ValueError(f"返回不是有效 JSON：{content[:150]}")
             return meta
 
+        meta = None
         last_err = ""
-        for attempt in range(2):
+        for attempt in range(3):
             try:
+                await self._llm_gate()
                 meta = await _call_once()
                 break
+            except _RateLimited as exc:
+                last_err = f"第{attempt + 1}次尝试: {exc}"[:200]
+                cooldown = max(exc.retry_after, 12.0)
+                self._llm_cooldown_until = _now() + cooldown
+                logger.warning(f"[StickerKit] 上游限流/过载({item.get('name')}) {last_err}；全队列冷却 {cooldown:.0f}s")
+                if attempt < 2:
+                    await asyncio.sleep(cooldown)
             except Exception as exc:
-                last_err = str(exc)[:200]
-                if attempt == 0:
-                    await asyncio.sleep(2)
-        else:
+                last_err = f"第{attempt + 1}次尝试: {exc}"[:200]
+                logger.warning(f"[StickerKit] 打标失败({item.get('name')}) {last_err}")
+                if attempt < 2:
+                    await asyncio.sleep(3 * (attempt + 1))
+        if meta is None:
             item["analysis_status"] = "failed"
             item["analysis_error"] = last_err
+            self._save_index()
             return
         item["name"] = str(meta.get("name") or item.get("name") or "未命名")[:40]
         item["tags"] = [str(t)[:20] for t in (meta.get("tags") or [])][:8]
@@ -713,6 +778,7 @@ class StickerKit(Star):
         register(f"{PANEL_PREFIX}", self._panel_page, ["GET"], "StickerKit 面板")
         register(f"{API_PREFIX}/list", self._api_list, ["GET"], "表情包列表")
         register(f"{API_PREFIX}/upload", self._api_upload, ["POST"], "批量上传")
+        register(f"{API_PREFIX}/import_dir", self._api_import_dir, ["POST"], "文件夹导入")
         register(f"{API_PREFIX}/update", self._api_update, ["POST"], "修改标注")
         register(f"{API_PREFIX}/delete", self._api_delete, ["POST"], "删除")
         register(f"{API_PREFIX}/image", self._api_image, ["GET"], "图片预览")
@@ -750,7 +816,15 @@ class StickerKit(Star):
             for it in sorted(self._items, key=lambda x: -float(x.get("created_at") or 0))
         ]
         llm_ready = all(self._llm_conf())
-        return {"status": "ok", "data": {"items": items, "llm_ready": llm_ready}}
+        return {
+            "status": "ok",
+            "data": {
+                "items": items,
+                "llm_ready": llm_ready,
+                "data_dir": str(self._data_dir),
+                "version": "1.2.1",
+            },
+        }
 
     async def _api_upload(self):
         all_files = await quart_request.files
@@ -809,8 +883,83 @@ class StickerKit(Star):
                 "duplicated": dup,
                 "rejected": rejected,
                 "ids": [it["id"] for it in saved],
+                "llm_ready": all(self._llm_conf()),
             }
         )
+
+    async def _api_import_dir(self):
+        """按本地路径导入一个文件夹里的图片（桌面端拖拽被壳拦截时的批量兜底）。"""
+        payload = await quart_request.get_json(silent=True) or {}
+        raw_path = str(payload.get("path") or "").strip().strip('"')
+        if not raw_path:
+            return self._err("请填写文件夹路径")
+        root = Path(raw_path)
+        if not root.exists() or not root.is_dir():
+            return self._err(f"目录不存在：{raw_path[:120]}")
+        try:
+            candidates = sorted(
+                (p for p in root.rglob("*") if p.is_file() and p.suffix.lower() in ALLOWED_EXT),
+                key=lambda p: p.stat().st_mtime,
+            )
+        except Exception as exc:
+            return self._err(f"扫描目录失败：{exc}"[:200])
+        limit = 500
+        truncated = len(candidates) > limit
+        candidates = candidates[:limit]
+        max_bytes = int(self.config.get("max_image_mb", 10) or 10) * 1024 * 1024
+        known_shas = {it.get("sha256") for it in self._items}
+        saved, dup, rejected = [], [], []
+        llm_ready = all(self._llm_conf())
+        for src in candidates:
+            try:
+                raw = src.read_bytes()
+            except Exception as exc:
+                rejected.append(f"{src.name}: 读取失败 {exc}"[:80])
+                continue
+            if len(raw) > max_bytes:
+                rejected.append(f"{src.name}: 超过 {max_bytes // 1024 // 1024}MB")
+                continue
+            sha = hashlib.sha256(raw).hexdigest()
+            if sha in known_shas:
+                dup.append(src.name)
+                continue
+            stored = f"{uuid.uuid4().hex}{src.suffix.lower()}"
+            (self._img_dir / stored).write_bytes(raw)
+            item = {
+                "id": uuid.uuid4().hex,
+                "stored_name": stored,
+                "sha256": sha,
+                "name": src.stem[:40],
+                "tags": [],
+                "emotions": [],
+                "intents": [],
+                "description": "",
+                "visible_text": "",
+                "enabled": True,
+                "size": len(raw),
+                "mime": mimetypes.guess_type(src.name)[0] or "image/jpeg",
+                "analysis_status": "none",
+                "analysis_error": "",
+                "source": "import_dir",
+                "created_at": _now(),
+            }
+            self._items.append(item)
+            known_shas.add(sha)
+            saved.append(item)
+            if llm_ready:
+                self._queue_analysis(item)
+        if saved:
+            self._save_index()
+        msg = {
+            "saved": len(saved),
+            "duplicated": [d for d in dup[:10]],
+            "duplicated_total": len(dup),
+            "rejected": rejected[:10],
+            "rejected_total": len(rejected),
+            "scanned": len(candidates),
+            "truncated": truncated,
+        }
+        return self._ok(msg)
 
     def _find(self, sticker_id: str) -> dict | None:
         return next((it for it in self._items if it["id"] == str(sticker_id)), None)
