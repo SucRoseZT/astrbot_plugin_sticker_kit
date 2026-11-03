@@ -36,11 +36,11 @@ SucRoseZT/astrbot_plugin_sticker_kit
 | `llm_min_interval` | 相邻打标请求最小间隔（秒），0 关闭 | 1.0 |
 | `protocol_mode` | 快速通道开关 | 开 |
 | `delivery_mode` | 表情包单独一条 / 跟随正文 | separate_after |
-| `image_format` | image / qq_emoji（OneBot 平台） | image |
+| `image_format` | image / qq_emoji（OneBot 平台） | qq_emoji |
 | `send_probability` | 快速通道发图概率 | 0.9 |
 | `send_cooldown_seconds` | 同会话发送冷却 | 30 |
 | `write_lock_seconds` | 发送后全局写锁 | 60 |
-| `admin_only` | 仅管理员可触发 LLM 工具 | 开 |
+| `admin_only` | 仅管理员可触发 LLM 工具 | 关 |
 
 ## 数据存储
 
