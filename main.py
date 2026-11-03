@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import difflib
 import hashlib
 import json
 import mimetypes
@@ -343,8 +344,23 @@ class StickerKit(Star):
                 extra.extend(w[i : i + 2] for i in range(len(w) - 1))
         return list(dict.fromkeys(words + extra))
 
-    @classmethod
-    def _score_item(cls, keywords: list[str], raw_query: str, item: dict) -> float:
+    @staticmethod
+    def _sim(a: str, b: str) -> float:
+        """两个短词的相似度：编辑序列相似度与字符 Jaccard 取较大者。"""
+        if not a or not b:
+            return 0.0
+        if a == b:
+            return 1.0
+        r = difflib.SequenceMatcher(None, a, b).ratio()
+        sa, sb = set(a), set(b)
+        union = sa | sb
+        j = len(sa & sb) / len(union) if union else 0.0
+        return max(r, j)
+
+    def _fuzzy_enabled(self) -> bool:
+        return bool(self.config.get("fuzzy_search", True))
+
+    def _score_item(self, keywords: list[str], raw_query: str, item: dict) -> float:
         if not item.get("enabled", True):
             return -1.0
         fields = {
@@ -364,6 +380,26 @@ class StickerKit(Star):
             for text, weight in fields.values():
                 if raw_query in text:
                     score += weight * 0.5
+        if self._fuzzy_enabled() and raw_query:
+            # 模糊层：完整词 vs 名称/标签词的近似匹配（"哼气"≈"生气"、"气鼓鼓"≈"生气"）
+            tokens = [(str(item.get("name") or ""), 4.0)]
+            tokens += [(str(t), 2.5) for t in (item.get("tags") or [])]
+            tokens += [(str(t), 2.0) for t in (item.get("emotions") or [])]
+            tokens += [(str(t), 2.0) for t in (item.get("intents") or [])]
+            tokens = [(t, w) for t, w in tokens if t]
+            fuzzy_words = re.split(r"[\s,，。.！!？?、/|]+", str(raw_query).strip())
+            fuzzy_words = [w for w in fuzzy_words if len(w) >= 2]
+            seen = set()
+            for w in fuzzy_words:
+                if w in seen:
+                    continue
+                seen.add(w)
+                best = 0.0
+                for text, weight in tokens:
+                    s = self._sim(w, text)
+                    if s >= 0.4:
+                        best = max(best, weight * s)
+                score += best
         return score
 
     def _search(self, query: str, top_k: int) -> list[tuple[float, dict]]:
@@ -629,7 +665,7 @@ class StickerKit(Star):
             total = len(self._items)
             analyzing = sum(1 for it in self._items if it.get("analysis_status") == "pending")
             yield event.plain_result(
-                f"StickerKit v1.2.1：库存 {total} 张（本次启动迁移自陪伴插件 {self._migrated} 张），"
+                f"StickerKit v1.3.0：库存 {total} 张（本次启动迁移自陪伴插件 {self._migrated} 张），"
                 f"打标中 {analyzing}，快速通道={'开' if self.config.get('protocol_mode', True) else '关'}，"
                 f"概率={float(self.config.get('send_probability', 1.0)):.0%}，"
                 f"投递={self.config.get('delivery_mode', 'separate_after')}，格式={self.config.get('image_format', 'image')}，"
@@ -783,9 +819,11 @@ class StickerKit(Star):
         register(f"{API_PREFIX}/delete", self._api_delete, ["POST"], "删除")
         register(f"{API_PREFIX}/image", self._api_image, ["GET"], "图片预览")
         register(f"{API_PREFIX}/analyze", self._api_analyze, ["POST"], "重新打标")
+        register(f"{API_PREFIX}/config", self._api_config, ["GET"], "配置读取")
+        register(f"{API_PREFIX}/config/set", self._api_config_set, ["POST"], "配置保存")
 
     async def _panel_page(self):
-        page = Path(__file__).parent / "pages" / "表情包面板" / "index.html"
+        page = Path(__file__).parent / "pages" / "表情包小屋" / "index.html"
         return await send_file(str(page))
 
     def _ok(self, data=None) -> dict:
@@ -793,6 +831,164 @@ class StickerKit(Star):
 
     def _err(self, msg: str) -> dict:
         return {"status": "error", "message": msg}
+
+    # ---------- WebUI 配置页 ----------
+
+    _CFG_GROUPS = (
+        ("LLM 视觉打标", ("llm_api_base", "llm_api_key", "llm_model", "llm_concurrency", "llm_min_interval")),
+        ("快速通道", ("protocol_mode", "delivery_mode", "image_format", "send_probability")),
+        ("AI 工具与发送", ("admin_only", "enable_send", "enable_search", "top_k", "send_cooldown_seconds", "write_lock_seconds")),
+        ("检索与导入", ("fuzzy_search", "max_image_mb")),
+    )
+
+    @property
+    def _cfg_path(self) -> Path:
+        return DATA_ROOT / "config" / f"{PLUGIN_NAME}_config.json"
+
+    def _cfg_schema(self) -> dict:
+        try:
+            return json.loads((Path(__file__).parent / "_conf_schema.json").read_text(encoding="utf-8-sig"))
+        except Exception as exc:
+            logger.warning(f"[StickerKit] 读取配置 schema 失败: {exc}")
+            return {}
+
+    @staticmethod
+    def _short_label(desc: str) -> str:
+        head = re.split(r"[：:；（(]", str(desc or ""), 1)[0].strip()
+        return head[:30] or "未命名配置"
+
+    def _cfg_items(self) -> list[dict]:
+        schema = self._cfg_schema()
+        try:
+            cur = dict(self.config)
+        except Exception:
+            cur = {}
+        items, placed = [], set()
+        for group, keys in self._CFG_GROUPS:
+            for k in keys:
+                meta = schema.get(k)
+                if not meta:
+                    continue
+                placed.add(k)
+                items.append({
+                    "key": k,
+                    "group": group,
+                    "type": meta.get("type", "string"),
+                    "value": cur.get(k, meta.get("default")),
+                    "options": meta.get("options") or [],
+                    "hint": str(meta.get("description") or ""),
+                    "label": self._short_label(meta.get("description")),
+                    "secret": k == "llm_api_key",
+                })
+        for k, meta in schema.items():
+            if k in placed:
+                continue
+            placed.add(k)
+            items.append({
+                "key": k,
+                "group": "其他",
+                "type": meta.get("type", "string"),
+                "value": cur.get(k, meta.get("default")),
+                "options": meta.get("options") or [],
+                "hint": str(meta.get("description") or ""),
+                "label": self._short_label(meta.get("description")),
+                "secret": False,
+            })
+        return items
+
+    def _write_cfg_file(self) -> str:
+        try:
+            data = dict(self.config)
+        except Exception:
+            data = {}
+        try:
+            self._cfg_path.parent.mkdir(parents=True, exist_ok=True)
+            self._cfg_path.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8-sig"
+            )
+            return "file"
+        except Exception as exc:
+            logger.warning(f"[StickerKit] 配置直接写文件失败: {exc}")
+            return "none"
+
+    def _apply_runtime(self) -> None:
+        """配置变更后重建运行时限流对象，立即生效。"""
+        try:
+            llm_conc = max(1, int(self.config.get("llm_concurrency", 2) or 2))
+        except (TypeError, ValueError):
+            llm_conc = 2
+        try:
+            interval = max(0.0, float(self.config.get("llm_min_interval", 1.0) or 0))
+        except (TypeError, ValueError):
+            interval = 1.0
+        if getattr(self, "_llm_sem", None) is None or self._llm_sem._value != llm_conc:
+            self._llm_sem = asyncio.Semaphore(llm_conc)
+        self._llm_min_interval = interval
+        logger.info(f"[StickerKit] 配置已热更新：并发={llm_conc} 间隔={interval}s 模糊搜索={self._fuzzy_enabled()}")
+
+    async def _api_config(self):
+        return self._ok({
+            "items": self._cfg_items(),
+            "path": str(self._cfg_path),
+        })
+
+    async def _api_config_set(self):
+        data = await quart_request.get_json(silent=True) or {}
+        patch = data.get("patch") if isinstance(data.get("patch"), dict) else data
+        if not patch:
+            return self._err("没有要保存的改动")
+        schema = self._cfg_schema()
+        applied = {}
+        for k, v in patch.items():
+            meta = schema.get(k)
+            if not meta:
+                continue
+            t = meta.get("type", "string")
+            try:
+                if t == "bool":
+                    if isinstance(v, str):
+                        v = v.strip().lower() in ("1", "true", "on", "yes", "开")
+                    v = bool(v)
+                elif t == "int":
+                    v = int(float(v))
+                elif t == "float":
+                    v = float(v)
+                else:
+                    v = str(v).strip()
+                    opts = meta.get("options")
+                    if opts and v not in opts:
+                        continue
+            except (TypeError, ValueError):
+                continue
+            if k == "llm_api_key" and not v:
+                continue  # 密钥留空 = 保持不变，防止误清空
+            applied[k] = v
+        if not applied:
+            return self._err("没有有效的改动（未知键或空密钥）")
+        for k, v in applied.items():
+            try:
+                self.config[k] = v
+            except Exception:
+                logger.warning(f"[StickerKit] 写入内存配置 {k} 失败")
+        mode = "memory"
+        saver = getattr(self.config, "save_config", None)
+        if callable(saver):
+            try:
+                saver()
+                mode = "saved"
+            except Exception:
+                logger.warning("[StickerKit] save_config 失败，退回直接写文件", exc_info=True)
+                mode = self._write_cfg_file()
+        else:
+            mode = self._write_cfg_file()
+        self._apply_runtime()
+        return self._ok({
+            "saved": True,
+            "mode": mode,
+            "items": self._cfg_items(),
+            "path": str(self._cfg_path),
+        })
+
 
     async def _api_list(self):
         items = [
@@ -822,7 +1018,7 @@ class StickerKit(Star):
                 "items": items,
                 "llm_ready": llm_ready,
                 "data_dir": str(self._data_dir),
-                "version": "1.2.1",
+                "version": "1.3.0",
             },
         }
 
