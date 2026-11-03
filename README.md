@@ -15,9 +15,9 @@
 1. 点击上传区选择文件（可多选）
 2. 截图后直接 `Ctrl+V` 粘贴
 3. 粘贴本地文件夹路径，一键批量导入（递归扫描、内容去重、单次上限 500 张）
-4. 在浏览器中打开面板（面板内有入口），支持拖拽图片 / 文件夹到页面任意位置
+4. 浏览器登录 WebUI 后从侧边栏打开面板，支持拖拽图片 / 文件夹到页面任意位置
 
-> 桌面端 Launcher（Tauri）会在窗口层拦截系统拖拽，属宿主限制，面板内已提供浏览器打开入口与文件夹导入兜底。
+> 桌面端 Launcher（Tauri）会在窗口层拦截系统拖拽，属宿主限制，文件夹导入与粘贴上传不受影响。
 
 ## 安装
 
@@ -36,17 +36,20 @@ SucRoseZT/astrbot_plugin_sticker_kit
 | `llm_min_interval` | 相邻打标请求最小间隔（秒），0 关闭 | 1.0 |
 | `protocol_mode` | 快速通道开关 | 开 |
 | `delivery_mode` | 表情包单独一条 / 跟随正文 | separate_after |
-| `image_format` | image / qq_emoji（OneBot 平台） | qq_emoji |
+| `image_format` | image / qq_emoji（OneBot 平台） | image |
 | `send_probability` | 快速通道发图概率 | 0.9 |
 | `send_cooldown_seconds` | 同会话发送冷却 | 30 |
 | `write_lock_seconds` | 发送后全局写锁 | 60 |
-| `admin_only` | 仅管理员可触发 LLM 工具 | 关 |
+| `admin_only` | 仅管理员可触发 LLM 工具 | 开 |
 
 ## 数据存储
 
 标注与图片保存在 `data/plugin_data/astrbot_plugin_sticker_kit/`（`index.json` + `images/`），面板内可见完整路径，可随实例整体迁移备份。
 
 ## 更新日志
+
+### v1.3.0
+- 新增 WebUI 插件面板「表情包小屋」：上传 / 批量导入 / 标注编辑 / 状态筛选 / 下载原图，内置配置页，改动即存即生效
 
 ### v1.2.1
 - 新增 `llm_min_interval` 全局限流：相邻打标请求强制最小间隔，防止批量导入触发 503/429
