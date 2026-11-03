@@ -1,8 +1,8 @@
 {
   "llm_api_base": {
-    "description": "打标用 LLM API 地址（OpenAI 兼容，填到 /v1 为止）；留空则不自动打标",
+    "description": "打标用 LLM API 地址（OpenAI 兼容，填到 /v1 为止，如 https://open.bigmodel.cn/api/paas/v4）；留空则不自动打标",
     "type": "string",
-    "default": "https://open.bigmodel.cn/api/paas/v4"
+    "default": ""
   },
   "llm_api_key": {
     "description": "打标用 LLM API Key（自行申请填写，不同服务商可更换上方地址与模型名）",
@@ -12,7 +12,7 @@
   "llm_model": {
     "description": "打标用模型名（需支持图片输入，如 glm-5.3-flash / gemini-2.5-flash / qwen-vl-max）",
     "type": "string",
-    "default": "glm-5.3-flash"
+    "default": ""
   },
   "llm_concurrency": {
     "description": "打标并发数：同时请求 LLM 的图片数量上限。批量上传上百张时并发太高会被 API 限流导致大量 fail，建议 1~3",
@@ -45,12 +45,12 @@
       "image",
       "qq_emoji"
     ],
-    "default": "qq_emoji"
+    "default": "image"
   },
   "admin_only": {
     "description": "仅管理员可触发表情包相关 LLM 工具（关闭则群友也能让 AI 发表情包）",
     "type": "bool",
-    "default": false
+    "default": true
   },
   "enable_send": {
     "description": "开启 AI 发送表情包（sticker_pick）",
@@ -59,6 +59,11 @@
   },
   "enable_search": {
     "description": "开启 AI 检索表情包（sticker_search / sticker_list）",
+    "type": "bool",
+    "default": true
+  },
+  "fuzzy_search": {
+    "description": "模糊检索：关键词与名称/标签近似也能命中（如搜\"生气\"能带出\"哼气\"\"气鼓鼓\"等近似词），关闭后仅精确匹配",
     "type": "bool",
     "default": true
   },
