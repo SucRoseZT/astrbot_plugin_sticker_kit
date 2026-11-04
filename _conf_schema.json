@@ -24,19 +24,36 @@
     "type": "float",
     "default": 1.0
   },
+  "sticker_frequency": {
+    "description": "配图频率档位（提示词层）：AI 主动配图的整体倾向。关闭=不注入协议、AI 不会主动配图；很少=只在用户点名时发；适中=约每三四条回复一张；较多=大多数回复配图；每条都发=每条回复都配",
+    "type": "string",
+    "options": [
+      "关闭",
+      "很少",
+      "适中",
+      "较多",
+      "每条都发"
+    ],
+    "default": "适中"
+  },
   "protocol_mode": {
-    "description": "快速通道：AI 在回复末尾输出 <sticker> 标签即可自动配图（本地检索选图，一次回复就带图，不再多轮工具调用，速度快省 token）",
+    "description": "快速通道总开关：AI 在回复末尾输出 <sticker> 标签即可自动配图（本地检索选图，一次回复就带图，不再多轮工具调用）；关掉后下方的配图频率档位也不再生效",
     "type": "bool",
     "default": true
   },
   "delivery_mode": {
-    "description": "投递方式：separate_after=正文先发、表情包再单独发一条（推荐，和陪伴插件一致）；same_message=表情包跟在正文同一条消息里",
+    "description": "投递方式：separate_after=文字先发、表情包再单独发一条（推荐，和陪伴插件一致）；same_message=表情包跟在文字同一条消息里。快速通道与搜索工具两条路径都遵守此项",
     "type": "string",
     "options": [
       "separate_after",
       "same_message"
     ],
     "default": "separate_after"
+  },
+  "separate_send_gap_ms": {
+    "description": "分段间隔（毫秒）：separate_after 模式下，文字与表情包两条消息之间的停顿，0 为不等待。太快可能被部分平台合并或触发风控",
+    "type": "int",
+    "default": 350
   },
   "image_format": {
     "description": "发送格式：image=普通图片（兼容所有平台）；qq_emoji=QQ 表情格式（仅 OneBot/aiocqhttp 平台生效，观感更接近原生表情包）",
@@ -73,14 +90,39 @@
     "default": 6
   },
   "send_cooldown_seconds": {
-    "description": "发送冷却（秒），同一会话两次发送的最小间隔",
+    "description": "发送冷却（秒）：同一会话两次发图的最小间隔，0 为不限。用户点名要表情包时可被下面的点名豁免跳过",
     "type": "int",
     "default": 30
   },
   "send_probability": {
-    "description": "快速通道发送概率（0~1）：AI 输出表情标签时按此概率实际发图，未命中只发文字不消耗冷却",
+    "description": "发送概率（0~1）：AI 写了表情标签后按此概率真的发图，1.0=写出就必发，0.9=每十次吞一次。未命中不消耗冷却",
     "type": "float",
     "default": 0.9
+  },
+  "named_request_bypass": {
+    "description": "点名豁免：用户明确要表情包时跳过概率和冷却，保证要就发得出来（推荐开启）",
+    "type": "bool",
+    "default": true
+  },
+  "named_request_keywords": {
+    "description": "点名关键词（英文逗号分隔）：用户消息含这些词即视为点名要表情包，配合上一项生效",
+    "type": "string",
+    "default": "表情包,斗图,发个图,发张图,来张图,配个图,发表情,来一张"
+  },
+  "protocol_prompt_extra": {
+    "description": "附加协议指令（可留空）：追加在表情协议末尾的自定义约束，如「群里只有被 @ 时才发」",
+    "type": "string",
+    "default": ""
+  },
+  "custom_protocol_prompt": {
+    "description": "完全自定义协议（可留空）：填了就整段替换内置文案，必须保留 [表情包能力] 开头和 <sticker> 标签格式说明",
+    "type": "string",
+    "default": ""
+  },
+  "inject_to_user_prompt": {
+    "description": "兜底注入（默认关）：额外把一行极简标签说明写进用户消息末尾，防止被其他插件整体覆盖 system_prompt 后协议失效",
+    "type": "bool",
+    "default": false
   },
   "write_lock_seconds": {
     "description": "发送成功后全局锁（秒）：锁定期内所有表情包工具直接拒绝，让 AI 用文字汇报即可，防止反复调用",

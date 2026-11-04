@@ -36,14 +36,69 @@ API_PREFIX = f"{PLUGIN_NAME}/api"
 
 ALLOWED_EXT = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
 
-_PROTOCOL_PROMPT = (
-    "[表情包能力] 你可以在回复里配一张表情包（不要每条都配，只在语境合适、或用户点名要表情包时用）。"
-    "方法：把回复正文照常写完，然后在最末尾另起一行输出标签：\n"
-    '<sticker>{"query":"三五个关键词"}</sticker>\n'
-    "query 写想要的情绪/画面/内容关键词（如「得意 自夸」「委屈 委巴巴」），"
-    "系统会本地检索最匹配的一张图并自动追加在回复后，用户看不到标签本身。"
-    "没有合适的就不输出标签；不要输出标签以外的任何表情占位格式。"
-)
+_PROTOCOL_MARK = "[表情包能力]"
+
+DEFAULT_NAMED_KEYWORDS = "表情包,斗图,发个图,发张图,来张图,配个图,发表情,来一张"
+
+# 频档 → 提示词语气。全部使用正向引导，不再出现「不要每条都配」这类否定起手，
+# 避免小模型把「默认不发」当成结论。off 表示不注入协议。
+_FREQ_POLICY = {
+    "off": "",
+    "rare": "配图从简：只有用户明确索要表情包时才配一张，其余回复不配图。",
+    "normal": "自然配图：语境合适时配一张，大致每三四条回复一次；用户要表情包时一定配上。",
+    "often": "积极配图：绝大多数回复都配一张，只有严肃话题、道歉、长篇说明这类场合才不配。",
+    "always": "每条回复都配一张表情包，仅当内容必须严肃或需要长篇说明时例外。",
+}
+
+# 面板里是中文选项，这里同时接受中文与英文别名，避免手改配置文件时值失效。
+_FREQ_ALIAS = {
+    "": "normal",
+    "关闭": "off",
+    "禁用": "off",
+    "off": "off",
+    "none": "off",
+    "0": "off",
+    "很少": "rare",
+    "少": "rare",
+    "rare": "rare",
+    "low": "rare",
+    "适中": "normal",
+    "默认": "normal",
+    "normal": "normal",
+    "medium": "normal",
+    "较多": "often",
+    "多": "often",
+    "often": "often",
+    "high": "often",
+    "每条都发": "always",
+    "每条": "always",
+    "always": "always",
+}
+
+_FREQ_LABELS = {
+    "off": "关闭",
+    "rare": "很少",
+    "normal": "适中",
+    "often": "较多",
+    "always": "每条都发",
+}
+
+
+def _protocol_body(level: str, extra: str = "") -> str:
+    """按频档拼出协议正文；extra 为用户自定义的附加约束。"""
+    policy = _FREQ_POLICY.get(level, _FREQ_POLICY["normal"])
+    body = (
+        f"{_PROTOCOL_MARK} {policy}"
+        "写法：把正文照常写完，然后在最末尾另起一行输出标签：\n"
+        '<sticker>{"query":"三五个关键词"}</sticker>\n'
+        "query 写想要的情绪/画面/内容关键词（如「得意 自夸」「委屈 委巴巴」），"
+        "系统会本地检索最匹配的一张图并自动追加在回复后，用户看不到标签本身。"
+        "没有合适的图就不输出标签；除这个标签外不要使用其他表情占位格式。"
+    )
+    extra = str(extra or "").strip()
+    if extra:
+        body = f"{body}\n{extra}"
+    return body
 
 _TAG_RE = re.compile(
     r"(?:<|&lt;|\\<)\s*sticker\s*(?:>|&gt;|\\>)(.*?)"
@@ -172,6 +227,8 @@ class StickerKit(Star):
         self._migrate_companion()
         self._write_lock_until = 0.0
         self._last_send: dict[str, float] = {}
+        self._inject_state: dict = {}
+        self._last_tag_hit = 0.0
         self._analysis_tasks: dict[str, asyncio.Task] = {}
         try:
             llm_conc = max(1, int(self.config.get("llm_concurrency", 2) or 2))
@@ -313,6 +370,55 @@ class StickerKit(Star):
         prob = min(1.0, max(0.0, prob))
         return prob >= 1.0 or random.random() < prob
 
+    # ---------- 配图频率：档位 / 点名豁免 / 协议拼装 ----------
+
+    def _frequency_level(self) -> str:
+        raw = str(self.config.get("sticker_frequency", "适中") or "").strip()
+        return _FREQ_ALIAS.get(raw.lower(), _FREQ_ALIAS.get(raw, "normal"))
+
+    def _build_protocol_prompt(self) -> str:
+        """按频档生成协议；custom_protocol_prompt 非空时整段替换内置文案。"""
+        extra = str(self.config.get("protocol_prompt_extra") or "").strip()
+        custom = str(self.config.get("custom_protocol_prompt") or "").strip()
+        if custom:
+            if _PROTOCOL_MARK not in custom:
+                custom = f"{_PROTOCOL_MARK} {custom}"
+            return f"{custom}\n{extra}" if extra else custom
+        level = self._frequency_level()
+        if level == "off":
+            return ""
+        return _protocol_body(level, extra)
+
+    def _named_keywords(self) -> list[str]:
+        raw = self.config.get("named_request_keywords")
+        if raw is None or str(raw).strip() == "":
+            raw = DEFAULT_NAMED_KEYWORDS
+        return [w.strip().lower() for w in re.split(r"[,，、]", str(raw)) if w.strip()]
+
+    def _event_text(self, event: AstrMessageEvent) -> str:
+        text = str(getattr(event, "message_str", "") or "")
+        if not text:
+            obj = getattr(event, "message_obj", None)
+            text = str(getattr(obj, "message_str", "") or "")
+        return text
+
+    def _is_named_request(self, event: AstrMessageEvent) -> bool:
+        """用户是否明确点名要表情包（用于跳过概率与冷却）。"""
+        if not self.config.get("named_request_bypass", True):
+            return False
+        low = self._event_text(event).lower()
+        if not low:
+            return False
+        return any(k in low for k in self._named_keywords())
+
+    def _record_inject(self, total: int, level: str, skipped: str = "") -> None:
+        self._inject_state = {
+            "ts": _now(),
+            "total": total,
+            "level": level,
+            "skipped": skipped,
+        }
+
     def _build_image_component(self, event: AstrMessageEvent, path: Path):
         if str(self.config.get("image_format") or "image").lower() == "qq_emoji":
             try:
@@ -441,13 +547,15 @@ class StickerKit(Star):
             emo = "/".join((it.get("emotions") or [])[:3])
             lines.append(f"#{rank} sticker_id={it['id']} 名称={it.get('name')} 情绪={emo}")
             lines.append(f"    描述：{desc}")
-        lines.append("发送时 caption 必须是一条完整、自然、可独立成立的正文，图片只是追加在正文后。")
+        lines.append("发送时 caption 必须是一条完整、自然、可独立成立的正文；图片会按投递设置跟在正文后（可能单独一条消息）。")
         return "\n".join(lines)
 
     @filter.llm_tool(name="sticker_pick")
     async def sticker_pick(self, event: AstrMessageEvent, sticker_id: str, caption: str):
         """发送指定的表情包图片。必须先用 sticker_search 拿到 sticker_id，禁止凭空填写。
 
+        更省事的做法是走快速通道：不调用本工具，直接在回复末尾输出
+        <sticker>{"query":"关键词"}</sticker>，系统会自动选图并追加到正文后。
         仅管理员可用；caption 是随图发出的完整文字正文，不能为空、不能用「请忽略/测试」类占位内容。
         Args:
             sticker_id(string): sticker_search 返回的 sticker_id，逐字符照抄
@@ -459,9 +567,10 @@ class StickerKit(Star):
         blocked = self._feature_check("send")
         if blocked:
             return blocked
-        cooldown_hit = self._send_cooldown(event)
-        if cooldown_hit:
-            return cooldown_hit
+        if not self._is_named_request(event):
+            cooldown_hit = self._send_cooldown(event)
+            if cooldown_hit:
+                return cooldown_hit
         caption = str(caption or "").strip()
         if not caption or re.search(r"忽略|误发|误触|测试消息|占位", caption, re.IGNORECASE):
             return "caption 缺失或无意义（请忽略/测试类）：请提供一条完整自然的正文，图片不能替代正文。"
@@ -476,16 +585,46 @@ class StickerKit(Star):
             image_component = self._build_image_component(event, path)
         except Exception as exc:
             return f"图片组件构造失败：{exc}"
+        mode = str(self.config.get("delivery_mode") or "separate_after").lower()
+        if mode not in {"separate_after", "same_message"}:
+            mode = "separate_after"
         try:
-            chain = MessageChain([Plain(caption), image_component])
-            result = await self.context.send_message(event.unified_msg_origin, chain)
-            if result is False:
-                return "发送失败：平台返回 False，请如实告知用户发送未成功。"
+            if mode == "same_message":
+                result = await self.context.send_message(
+                    event.unified_msg_origin,
+                    MessageChain([Plain(caption), image_component]),
+                )
+                if result is False:
+                    return "发送失败：平台返回 False，请如实告知用户发送未成功。"
+                delivered = "同一条消息"
+            else:
+                text_result = await self.context.send_message(
+                    event.unified_msg_origin, MessageChain([Plain(caption)])
+                )
+                if text_result is False:
+                    return "发送失败：文字部分未发出（平台返回 False），请如实告知用户本次未发送成功。"
+                try:
+                    gap_ms = int(float(self.config.get("separate_send_gap_ms", 350) or 0))
+                except (TypeError, ValueError):
+                    gap_ms = 350
+                if gap_ms > 0:
+                    await asyncio.sleep(min(gap_ms, 3000) / 1000)
+                img_result = await self.context.send_message(
+                    event.unified_msg_origin, MessageChain([image_component])
+                )
+                if img_result is False:
+                    self._mark_sent(event, item)
+                    self._engage_lock()
+                    return "文字已发出，但表情包图片发送失败（平台返回 False），请如实告知用户图没发出去。"
+                delivered = "文字 + 表情包两条消息"
         except Exception as exc:
             return f"发送失败：{exc}"
         self._mark_sent(event, item)
         self._engage_lock()
-        return f"表情包「{item.get('name')}」已随正文发送成功。到此为止，不要重复发送，也不要再调用任何表情包工具验证。"
+        return (
+            f"表情包「{item.get('name')}」已作为{delivered}发送成功。"
+            "正文已经发出，本轮不要再重复相同内容，也不要再调用任何表情包工具验证。"
+        )
 
     @filter.llm_tool(name="sticker_list")
     async def sticker_list(self, event: AstrMessageEvent, page: int = 1):
@@ -516,8 +655,15 @@ class StickerKit(Star):
 
     # ---------- 快速通道：协议标签配图 ----------
 
-    @filter.on_llm_request()
+    @filter.on_llm_request(priority=-99999)
     async def inject_sticker_protocol(self, event: AstrMessageEvent, req: ProviderRequest):
+        """把表情标签协议并入 system_prompt（幂等 + 最后写入）。
+
+        priority 取极小值：AstrBot 按 priority 从大到小执行钩子，越小越晚执行。
+        设成 -99999 可确保本插件在最后一步写入，不会被 priority=0 附近、
+        尤其不会被「整体赋值 req.system_prompt = ...」的插件覆盖。
+        同时做幂等检查，避免同一请求内被重复注入。
+        """
         if not self.config.get("protocol_mode", True):
             return
         if not self.config.get("enable_send", True):
@@ -525,9 +671,37 @@ class StickerKit(Star):
         if self.config.get("admin_only", True) and not event.is_admin():
             return
         try:
-            req.system_prompt = (req.system_prompt or "") + "\n" + _PROTOCOL_PROMPT
-        except Exception:
-            pass
+            prompt = self._build_protocol_prompt()
+        except Exception as exc:
+            logger.warning(f"[StickerKit] 构建表情协议失败: {type(exc).__name__} {exc}")
+            return
+        level = self._frequency_level()
+        try:
+            current = str(getattr(req, "system_prompt", "") or "")
+            if not prompt:
+                self._record_inject(len(current), level, f"频档={_FREQ_LABELS.get(level, level)}，未注入")
+                return
+            if _PROTOCOL_MARK in current:
+                self._record_inject(len(current), level, "已存在协议，跳过重复注入")
+                return
+            req.system_prompt = f"{current}\n{prompt}" if current.strip() else prompt
+            merged = str(getattr(req, "system_prompt", "") or "")
+            if _PROTOCOL_MARK not in merged:
+                logger.warning("[StickerKit] 注入后未检测到协议标记：可能有插件覆盖了 system_prompt")
+                self._record_inject(len(merged), level, "注入未生效（疑似被覆盖）")
+                return
+            if self.config.get("inject_to_user_prompt", False):
+                user = str(getattr(req, "prompt", "") or "")
+                hint = '（要配表情包时，请在回复末尾另起一行输出 <sticker>{"query":"关键词"}</sticker>）'
+                if "<sticker>" not in user:
+                    req.prompt = f"{user}\n{hint}" if user.strip() else hint
+            self._record_inject(len(merged), level)
+            logger.info(
+                f"[StickerKit] 表情协议已注入：频档={_FREQ_LABELS.get(level, level)} "
+                f"协议{len(prompt)}字 总长{len(merged)}"
+            )
+        except Exception as exc:
+            logger.warning(f"[StickerKit] 注入表情协议失败: {type(exc).__name__} {exc}")
 
     @filter.on_decorating_result()
     async def attach_sticker_from_tag(self, event: AstrMessageEvent, *args, **kwargs):
@@ -550,15 +724,19 @@ class StickerKit(Star):
             comp.text = re.sub(r"\n{3,}", "\n\n", comp.text).rstrip()
         if not stripped:
             return
+        self._last_tag_hit = _now()
         send = self.config.get("enable_send", True)
         if send and self.config.get("admin_only", True) and not event.is_admin():
             send = False
             logger.info("[StickerKit] 快速通道跳过(静默拦截已记录)：非管理员消息")
-        if send and self._cooldown_hit(event):
+        named = bool(send) and self._is_named_request(event)
+        if named and send:
+            logger.info("[StickerKit] 用户点名要表情包：跳过概率与冷却")
+        if send and not named and self._cooldown_hit(event):
             remain = float(self.config.get("send_cooldown_seconds", 30) or 0) - (_now() - self._last_send.get(event.unified_msg_origin, 0))
             send = False
             logger.info(f"[StickerKit] 快速通道跳过：会话冷却中(剩 {remain:.0f}s) session={event.unified_msg_origin[:60]}")
-        if send and not self._probability_hit():
+        if send and not named and not self._probability_hit():
             send = False
             logger.info("[StickerKit] 快速通道概率未命中，本次仅发文字")
         item = None
@@ -664,13 +842,56 @@ class StickerKit(Star):
         if sub == "status":
             total = len(self._items)
             analyzing = sum(1 for it in self._items if it.get("analysis_status") == "pending")
+            level = self._frequency_level()
+            label = _FREQ_LABELS.get(level, level)
+            inj = self._inject_state or {}
+            if inj.get("ts"):
+                inj_txt = f"{_now() - inj['ts']:.0f} 秒前 · 总长 {inj.get('total', 0)} 字"
+                if inj.get("skipped"):
+                    inj_txt += f" · {inj['skipped']}"
+            else:
+                inj_txt = "本进程尚未触发（还没走过 LLM 请求）"
+            hit_txt = f"{_now() - self._last_tag_hit:.0f} 秒前" if self._last_tag_hit else "无"
             yield event.plain_result(
-                f"StickerKit v1.3.0：库存 {total} 张（本次启动迁移自陪伴插件 {self._migrated} 张），"
-                f"打标中 {analyzing}，快速通道={'开' if self.config.get('protocol_mode', True) else '关'}，"
-                f"概率={float(self.config.get('send_probability', 1.0)):.0%}，"
-                f"投递={self.config.get('delivery_mode', 'separate_after')}，格式={self.config.get('image_format', 'image')}，"
+                f"StickerKit v1.5.0：库存 {total} 张（本次启动迁移自陪伴插件 {self._migrated} 张），"
+                f"打标中 {analyzing}\n"
+                f"配图频率：档位={label} · 概率={float(self.config.get('send_probability', 1.0)):.0%}"
+                f" · 冷却={int(float(self.config.get('send_cooldown_seconds', 30) or 0))}s"
+                f" · 点名豁免={'开' if self.config.get('named_request_bypass', True) else '关'}\n"
+                f"快速通道={'开' if self.config.get('protocol_mode', True) else '关'}"
+                f"，投递={self.config.get('delivery_mode', 'separate_after')}"
+                f"，格式={self.config.get('image_format', 'image')}\n"
+                f"协议注入：{inj_txt}｜上次标签命中：{hit_txt}\n"
                 f"面板地址：WebUI → /api/plug/{PANEL_PREFIX}"
             )
+        elif sub == "freq":
+            parts = msg.split()
+            valid = ("关闭", "很少", "适中", "较多", "每条都发")
+            if len(parts) < 3:
+                yield event.plain_result(
+                    f"当前配图档位：{_FREQ_LABELS.get(self._frequency_level(), '适中')}。"
+                    f"用法：/sticker freq {'|'.join(valid)}"
+                )
+                return
+            val = parts[2].strip()
+            if val not in valid:
+                yield event.plain_result(f"档位只接受：{' / '.join(valid)}")
+                return
+            try:
+                self.config["sticker_frequency"] = val
+            except Exception:
+                yield event.plain_result("写入配置失败：配置对象不可写，请到面板修改。")
+                return
+            saver = getattr(self.config, "save_config", None)
+            if callable(saver):
+                try:
+                    saver()
+                    mode = "已保存"
+                except Exception:
+                    mode = self._write_cfg_file()
+            else:
+                mode = self._write_cfg_file()
+            yield event.plain_result(f"配图档位已设为「{val}」（{mode}），下一轮对话生效。")
         elif sub == "reload":
             self._load_index()
             yield event.plain_result(f"索引已重载：{len(self._items)} 条")
@@ -835,10 +1056,30 @@ class StickerKit(Star):
     # ---------- WebUI 配置页 ----------
 
     _CFG_GROUPS = (
-        ("LLM 视觉打标", ("llm_api_base", "llm_api_key", "llm_model", "llm_concurrency", "llm_min_interval")),
-        ("快速通道", ("protocol_mode", "delivery_mode", "image_format", "send_probability")),
-        ("AI 工具与发送", ("admin_only", "enable_send", "enable_search", "top_k", "send_cooldown_seconds", "write_lock_seconds")),
+        (
+            "配图频率",
+            (
+                "sticker_frequency",
+                "send_probability",
+                "send_cooldown_seconds",
+                "named_request_bypass",
+                "named_request_keywords",
+            ),
+        ),
+        (
+            "协议与文案",
+            (
+                "protocol_mode",
+                "protocol_prompt_extra",
+                "custom_protocol_prompt",
+                "inject_to_user_prompt",
+                "delivery_mode",
+                "image_format",
+            ),
+        ),
+        ("AI 工具与发送", ("admin_only", "enable_send", "enable_search", "top_k", "separate_send_gap_ms", "write_lock_seconds")),
         ("检索与导入", ("fuzzy_search", "max_image_mb")),
+        ("LLM 视觉打标", ("llm_api_base", "llm_api_key", "llm_model", "llm_concurrency", "llm_min_interval")),
     )
 
     @property
