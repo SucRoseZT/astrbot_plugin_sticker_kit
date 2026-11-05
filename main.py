@@ -297,6 +297,28 @@ def _review_state(item: dict) -> str:
     return r if r in ("pending", "rejected") else "approved"
 
 
+def _has_label(item: dict) -> bool:
+    """这张图算不算「已经有标了」。
+
+    AI 打的和手动填的都算。判定放宽是有意的：只要标签/情绪/意图里任意一个有内容，
+    就不该再被当成「打标中」——否则手动填完标签、队列里排队那张还没轮到，
+    面板会一直转圈说打标中，看着像卡死。
+    """
+    for k in ("tags", "emotions", "intents"):
+        v = item.get(k)
+        if isinstance(v, (list, tuple)) and any(str(x).strip() for x in v):
+            return True
+    return False
+
+
+def _tag_state(item: dict) -> str:
+    """对外汇报的打标状态：有标的一律按 complete 算。"""
+    st = str(item.get("analysis_status") or "none").strip().lower() or "none"
+    if _has_label(item):
+        return "complete"
+    return st
+
+
 # 来源徽章：管理页按天分组时显示
 SOURCE_LABEL = {
     "upload": "手动添加",
@@ -480,7 +502,7 @@ class StickerKit(Star):
             self._items = []
         # 上次被打断的 pending 不再抹成 none，而是留给 initialize() 重新排队，
         # 这样 100 张传到一半重启也不用一张张手动重打标。
-        stuck = sum(1 for it in self._items if it.get("analysis_status") == "pending")
+        stuck = sum(1 for it in self._items if _tag_state(it) == "pending")
         if stuck:
             logger.info(f"[StickerKit] 发现 {stuck} 条上次被打断的打标任务，稍后自动续跑")
 
@@ -1353,8 +1375,8 @@ class StickerKit(Star):
         """把对方刚发的表情包收进表情包库。
 
         QQ 表情（商城表情）和当图片发出来的收藏表情/表情图都算，都在这 5 分钟内的
-        候选里。只在用户明确表示想收藏/想收下/想偷这张表情时才调用；用户没提就不要调用，
-        更不要自己决定「这张不错我替他收了」。调用前别先说「看我把这张偷回来」，
+        候选里。默认只在用户明确表示想收藏/想偷时才调用；如果提示里说了「可以主动收」，
+        看到有意思的表情也可以自己收，但别每条消息都偷。调用前别先说「看我把这张偷回来」，
         等工具返回结果再说 —— 链接可能过期、图可能太大，提前宣布会下不来台。
         Args:
             index(number): 对方一次发了好几张时用来挑，0 = 最新一张（默认）
@@ -1612,7 +1634,7 @@ class StickerKit(Star):
         if sub == "status":
             total = len(self._items)
             pending_review = sum(1 for it in self._items if _review_state(it) == "pending")
-            analyzing = sum(1 for it in self._items if it.get("analysis_status") == "pending")
+            analyzing = sum(1 for it in self._items if _tag_state(it) == "pending")
             level = self._frequency_level()
             label = _FREQ_LABELS.get(level, level)
             inj = self._inject_state or {}
@@ -1656,7 +1678,7 @@ class StickerKit(Star):
             review_txt = f"，待审核 {pending_review} 张" if pending_review else ""
             steal_txt = "，偷表情包已开" if self._steal_on() else ""
             yield event.plain_result(
-                f"StickerKit v1.10.3：库存 {total} 张{review_txt}"
+                f"StickerKit v1.11.0：库存 {total} 张{review_txt}"
                 f"（本次启动迁移自陪伴插件 {self._migrated} 张），打标中 {analyzing}{steal_txt}\n"
                 f"打标模型：{self._llm_source_desc()}\n"
                 f"配图频率：档位={label} · 概率={float(self.config.get('send_probability', 1.0)):.0%}"
@@ -2286,14 +2308,18 @@ class StickerKit(Star):
             self._steal_pool.pop(umo, None)
         return pool
 
+    def _steal_proactive(self) -> bool:
+        """AI 主动偷：觉得表情有意思就自己收，不用等用户开口。"""
+        return self._steal_on() and bool(self.config.get("steal_proactive", False))
+
     def _steal_hint(self, event) -> str:
         """给 AI 的提示。没开功能 / 没权限时返回空串（但候选照记）。
 
         分三种：
-        - 这条带 QQ 表情（mface）→ 可以让 AI 顺口问一句要不要收
+        - 这条带 QQ 表情（mface）→ 问一句要不要收；开了主动偷就直接收
         - 这条带普通图片 → 只记候选，不主动问（别对别人的自拍嘘寒问暖），
           用户明说要偷时工具自然能拿到
-        - 只是手上有存货 → 一条短提醒，免得 AI 在纯文字聊天里反复问
+        - 只是手上有存货 → 一条短提醒；开了主动偷则允许 AI 自己挑一张收
         """
         if not self._steal_on():
             return ""
@@ -2303,8 +2329,15 @@ class StickerKit(Star):
             return ""  # 群友发的照样记下来，但不给提示（他们也不能偷）
         if self._steal_quota(event):
             return ""  # 冷却中 / 今日额度满：别让 AI 白问一句再被工具打回，白烧一轮 token
+        proactive = self._steal_proactive()
         mf = [c for c in fresh if c.get("kind") == "mface"]
         if mf:
+            if proactive:
+                return (
+                    "【偷表情包】对方这条消息里带 QQ 表情。你觉得有意思可以直接调用 sticker_steal"
+                    " 收进表情包库（不用先问）；也可以先问一句对方愿不愿意。"
+                    "别每条消息都偷，隔一阵收一张就好；对方明显不情愿就别收。"
+                )
             return (
                 "【偷表情包】对方这条消息里带 QQ 表情。可以顺手在回复末尾问一句要不要收进表情包库"
                 "（用户表示想收/想偷时，调用 sticker_steal 工具收录；用户没兴趣就别问，也别调用工具）。"
@@ -2316,6 +2349,12 @@ class StickerKit(Star):
                 "更不要自己决定替他收下来。"
             )
         if self._steal_candidates(umo):
+            if proactive:
+                return (
+                    "【偷表情包】手上还有之前收到的表情包，你闲着没事、觉得哪张有意思的话，"
+                    "可以自己调用 sticker_steal 收一张进库，不用等用户开口。"
+                    "但别每条消息都偷，偶尔来一张；用户正在说正事就别偷。"
+                )
             # 上一轮问过、用户这轮才说「要」——只提醒工具还能用，不再让 AI 主动发问
             return "【偷表情包】手上还有刚收到的表情包，用户说要/想收的话调用 sticker_steal 收录。"
         return ""
@@ -2524,6 +2563,12 @@ class StickerKit(Star):
             try:
                 if not any(it is item for it in self._items):
                     continue  # 排队期间被删掉了
+                # 轮到它时已经有标了（用户中途自己填了，或者批量导入时就带着标签）——
+                # 直接跳过，别再花一次 LLM 调用把人手填的盖掉。
+                if _has_label(item) and not force:
+                    item["analysis_status"] = "complete"
+                    item["analysis_error"] = ""
+                    continue
                 self._active_ids.add(iid)
                 self._active_since[iid] = _now()
                 self._queued_at.pop(iid, None)
@@ -2547,6 +2592,14 @@ class StickerKit(Star):
                 self._queue.task_done()
                 if self._queue.empty() and not self._active_ids:
                     self._save_index(immediate=True)
+
+    def _tag_batch_limit(self) -> int:
+        """一次批量操作（上传/审核/重打标）最多排多少张去打标。0 = 不限。"""
+        try:
+            n = int(float(self.config.get("tag_batch_limit", 0) or 0))
+        except (TypeError, ValueError):
+            n = 0
+        return max(0, n)
 
     def _queue_analysis(self, item: dict, force: bool = False) -> bool:
         if not self._llm_ready():
@@ -2572,9 +2625,12 @@ class StickerKit(Star):
         return (len(self._done_times) - 1) / span
 
     def _queue_stats(self) -> dict:
-        pending = sum(1 for it in self._items if it.get("analysis_status") == "pending")
-        failed = sum(1 for it in self._items if it.get("analysis_status") == "failed")
-        left = self._queue.qsize() + len(self._active_ids)
+        # 有标签的不算「待打标 / 失败」：手动填完标签那张不该继续让面板转圈
+        pending = sum(1 for it in self._items if _tag_state(it) == "pending")
+        failed = sum(1 for it in self._items if _tag_state(it) == "failed")
+        # left 用「真正还没标的条数」，别把队列里那些已经有标的（手动填完等 worker 跳过的）算进去，
+        # 否则进度条永远差最后一张，前端也会一直按 1.5 秒的快节奏轮询。
+        left = pending
         rate = self._queue_rate()
         return {
             "queued": self._queue.qsize(),
@@ -2603,7 +2659,10 @@ class StickerKit(Star):
         logger.info(f"[StickerKit] 打标队列{'已暂停' if paused else '已继续'}")
 
     def _drop_queued(self) -> int:
-        """清空待处理队列（不动正在飞的那几张），把它们退回「未打标」。"""
+        """清空待处理队列（不动正在飞的那几张），把它们退回「未打标」。
+
+        已经有标签的（手动填过，或者导入时自带）直接记成完成，别退回未打标。
+        """
         dropped = 0
         while True:
             try:
@@ -2613,9 +2672,11 @@ class StickerKit(Star):
             iid = item.get("id")
             self._queued_ids.discard(iid)
             self._queued_at.pop(iid, None)
-            if item.get("analysis_status") == "pending":
+            if _has_label(item):
+                item["analysis_status"] = "complete"
+            elif item.get("analysis_status") == "pending":
                 item["analysis_status"] = "none"
-                item["analysis_error"] = ""
+            item["analysis_error"] = ""
             dropped += 1
             self._queue.task_done()
         if dropped:
@@ -2684,9 +2745,10 @@ class StickerKit(Star):
             ),
         ),
         ("AI 工具与发送", ("admin_only", "enable_send", "enable_search", "top_k", "search_detail", "list_page_size", "separate_send_gap_ms", "write_lock_seconds")),
-        ("检索与导入", ("fuzzy_search", "min_score", "min_margin", "blocked_tags", "auto_tag_on_upload", "max_image_mb")),
+        ("检索与导入", ("fuzzy_search", "min_score", "min_margin", "blocked_tags",
+                       "auto_tag_on_upload", "auto_tag_on_approve", "tag_batch_limit", "max_image_mb")),
         ("LLM 视觉打标", ("llm_source", "llm_provider_id", "llm_provider_pool", "llm_api_base", "llm_api_key", "llm_model", "llm_concurrency", "llm_min_interval", "llm_max_image_side", "llm_reasoning_effort")),
-        ("偷表情包", ("steal_enabled", "steal_admin_only", "steal_auto_approve",
+        ("偷表情包", ("steal_enabled", "steal_admin_only", "steal_proactive", "steal_auto_approve",
                      "steal_cooldown", "steal_daily_limit", "steal_max_mb")),
     )
 
@@ -2802,6 +2864,32 @@ class StickerKit(Star):
                     hint += f"　·　当前：{used}/{lim} 张" + ("（今天已满额）" if used >= lim else "")
             elif k == "steal_max_mb":
                 hint = "单位 MB。超过这个大小的图直接跳过不下载，防止别人发个几十兆的视频表情把盘塞满。"
+            elif k == "steal_proactive":
+                on = bool(self.config.get("steal_proactive", False))
+                hint = (
+                    "开=AI 看到有意思的 QQ 表情可以自己决定收进库，不用你说偷；"
+                    "仍受下面的冷却和每日上限约束，普通图片（可能是自拍）不会主动偷。"
+                    "关着=只有你明确说偷才偷。"
+                )
+                hint += "　·　当前：" + ("AI 会自己挑着偷" if on else "只有你喊偷才偷")
+            elif k == "auto_tag_on_approve":
+                on = bool(self.config.get("auto_tag_on_approve", True))
+                hint = (
+                    "审核页点「允许」后要不要立刻排队打标。关着=只放行不打标，"
+                    "想打标去打标队列手动点重试（适合想先攒一批再统一打）。"
+                )
+                hint += "　·　当前：" + ("通过即排队打标" if on else "通过不打标，手动触发")
+            elif k == "tag_batch_limit":
+                try:
+                    cap = int(float(self.config.get("tag_batch_limit", 0) or 0))
+                except (TypeError, ValueError):
+                    cap = 0
+                hint = (
+                    "批量审核（比如「全部允许」）时一次最多排几张进打标队列，"
+                    "防止一口气点了几十张、LLM 账单和队列一起起飞。0 = 不限制。"
+                    "没排上的图之后在打标队列里手动点重试就行。"
+                )
+                hint += "　·　当前：" + ("不限制" if cap <= 0 else f"一次最多 {cap} 张")
             elif k == "llm_source":
                 hint = (
                     "自动 = 下面三项填全了就用它们，否则跟随 AstrBot 的提供商；"
@@ -3043,7 +3131,7 @@ class StickerKit(Star):
             "enabled": it.get("enabled", True),
             "size": it.get("size"),
             "mime": it.get("mime"),
-            "analysis_status": it.get("analysis_status", "none"),
+            "analysis_status": _tag_state(it),
             "analysis_error": it.get("analysis_error", ""),
             "confidence": (it.get("analysis_meta") or {}).get("confidence"),
             "human": it.get("human") or [],
@@ -3069,7 +3157,7 @@ class StickerKit(Star):
                 "data_dir": str(self._data_dir),
                 "queue": self._queue_stats(),
                 "llm": self._llm_source_desc() if llm_ready else "",
-                "version": "1.10.3",
+                "version": "1.11.0",
             },
         }
 
@@ -3247,9 +3335,12 @@ class StickerKit(Star):
             human = set(item.get("human") or [])
             human |= changed
             item["human"] = sorted(human)
-            # 人工接管了标注，就算打标没跑过也算完成，否则面板一直显示「未打标」
-            if item.get("analysis_status") in (None, "", "none") and item.get("emotions"):
-                item["analysis_status"] = "complete"
+        # 只要现在手上有标，就算打标完成 —— 以前只在 status=none 且填了 emotions 时才置位，
+        # 于是「上传后自动排队 → 手动填标签」这张会一直卡在「打标中」，队列页也一直转圈。
+        if _has_label(item):
+            item["analysis_status"] = "complete"
+            item["analysis_error"] = ""
+            self._queued_ids.discard(item.get("id"))
         self._save_index(immediate=True)
         return self._ok({"human": item.get("human") or []})
 
@@ -3347,9 +3438,13 @@ class StickerKit(Star):
         for it in targets:
             it["review"] = "approved"
             it["reviewed_at"] = _now()
-        if bool(self.config.get("auto_tag_on_upload", True)):
+        if bool(self.config.get("auto_tag_on_approve", True)):
+            cap = self._tag_batch_limit()
             for it in targets:
-                if (it.get("analysis_status") or "none") == "none" and self._queue_analysis(it):
+                if cap and queued >= cap:
+                    logger.info(f"[StickerKit] 本次审核只排前 {cap} 张打标（受「一次最多打标」限制）")
+                    break
+                if _tag_state(it) == "none" and self._queue_analysis(it):
                     queued += 1
         self._save_index(immediate=True)
         return self._ok({"allowed": len(targets), "queued": queued, "count": len(targets)})
@@ -3391,8 +3486,8 @@ class StickerKit(Star):
         active, queued, failed = [], [], []
         for it in self._items:
             iid = it.get("id")
-            st = it.get("analysis_status") or "none"
-            if iid in self._active_ids:
+            st = _tag_state(it)
+            if iid in self._active_ids and not _has_label(it):
                 active.append({
                     "id": iid,
                     "name": it.get("name") or "",
@@ -3450,7 +3545,8 @@ class StickerKit(Star):
             return self._err("请先在插件配置里填好打标模型，或选一个 AstrBot 提供商")
         payload = await quart_request.get_json(silent=True) or {}
         scope = str(payload.get("scope") or "failed")
-        targets = [it for it in self._items if (it.get("analysis_status") or "none") == scope]
+        # 用 _tag_state：已经有标的不会被当成「未打标」再排一遍
+        targets = [it for it in self._items if _tag_state(it) == scope]
         queued = sum(1 for it in targets if self._queue_analysis(it))
         return self._ok({"queued": queued, "total": len(targets),
                          "stats": self._queue_stats()})
@@ -3459,12 +3555,12 @@ class StickerKit(Star):
 
     async def initialize(self) -> None:
         """插件激活：续跑上次被打断的打标任务，并预热 worker 池。"""
-        pending = [it for it in self._items if it.get("analysis_status") == "pending"]
+        pending = [it for it in self._items if _tag_state(it) == "pending"]
         if not pending:
             return
         if not self._llm_ready():
             for it in pending:
-                it["analysis_status"] = "none"
+                it["analysis_status"] = "complete" if _has_label(it) else "none"
             self._save_index(immediate=True)
             logger.info("[StickerKit] LLM 未配置，已把 %d 条 pending 重置为未打标", len(pending))
             return

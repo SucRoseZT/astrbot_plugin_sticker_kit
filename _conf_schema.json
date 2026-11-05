@@ -86,10 +86,25 @@
     "type": "int",
     "default": 8
   },
+  "steal_proactive": {
+    "description": "主动偷表情：AI 觉得某张 QQ 表情有意思就自己收进库，不用等你喊偷（仍受冷却/每日上限约束，普通图片不主动偷）。关着=只有你说偷才偷",
+    "type": "bool",
+    "default": false
+  },
   "auto_tag_on_upload": {
     "description": "上传/导入后自动排队打标：关闭后所有图都需要在面板手动点「重打标」才会调用 LLM",
     "type": "bool",
     "default": true
+  },
+  "auto_tag_on_approve": {
+    "description": "审核通过后自动排队打标：关着=点「允许」只放行不调用 LLM，要打标得去打标队列手动点重试",
+    "type": "bool",
+    "default": true
+  },
+  "tag_batch_limit": {
+    "description": "一次最多打标几张：批量审核（如「全部允许」）时一次最多排这么多进打标队列，剩下的之后手动点。0 = 不限制",
+    "type": "int",
+    "default": 0
   },
   "sticker_frequency": {
     "description": "配图频率档位（提示词层）：AI 主动配图的整体倾向。关闭=不注入协议、AI 不会主动配图；很少=只在用户点名时发；适中=约每三四条回复一张；较多=大多数回复配图；每条都发=每条回复都配",
