@@ -1678,7 +1678,7 @@ class StickerKit(Star):
             review_txt = f"，待审核 {pending_review} 张" if pending_review else ""
             steal_txt = "，偷表情包已开" if self._steal_on() else ""
             yield event.plain_result(
-                f"StickerKit v1.11.0：库存 {total} 张{review_txt}"
+                f"StickerKit v1.11.1：库存 {total} 张{review_txt}"
                 f"（本次启动迁移自陪伴插件 {self._migrated} 张），打标中 {analyzing}{steal_txt}\n"
                 f"打标模型：{self._llm_source_desc()}\n"
                 f"配图频率：档位={label} · 概率={float(self.config.get('send_probability', 1.0)):.0%}"
@@ -3157,7 +3157,7 @@ class StickerKit(Star):
                 "data_dir": str(self._data_dir),
                 "queue": self._queue_stats(),
                 "llm": self._llm_source_desc() if llm_ready else "",
-                "version": "1.11.0",
+                "version": "1.11.1",
             },
         }
 
