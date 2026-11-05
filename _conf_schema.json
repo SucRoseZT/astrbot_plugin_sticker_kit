@@ -1,4 +1,26 @@
 {
+  "llm_source": {
+    "description": "打标模型来源：自动 / 跟随 AstrBot / 手动填写。自动=下面三项填全了就用它们，否则跟随 AstrBot 的提供商；跟随 AstrBot=只用在「AstrBot 提供商」里选的那个；手动填写=只用下面三项",
+    "type": "string",
+    "default": "自动",
+    "options": [
+      "自动",
+      "跟随 AstrBot",
+      "手动填写"
+    ]
+  },
+  "llm_provider_id": {
+    "description": "从 AstrBot 已配置的模型提供商里选一个用于打标（留空=自动用默认对话模型，只列 OpenAI 兼容的类型）",
+    "type": "string",
+    "default": "",
+    "options": []
+  },
+  "llm_provider_pool": {
+    "description": "候选打标模型（多选）：主模型被限流或报错时自动换下一个，图片只读一次不重复读盘。留空=只用主模型",
+    "type": "string",
+    "default": "",
+    "options": []
+  },
   "llm_api_base": {
     "description": "打标用 LLM API 地址（OpenAI 兼容，填到 /v1 为止，如 https://open.bigmodel.cn/api/paas/v4）；留空则不自动打标",
     "type": "string",
@@ -24,6 +46,51 @@
     "type": "float",
     "default": 1.0
   },
+  "llm_max_image_side": {
+    "description": "打标前缩小图片的最长边像素：视觉模型不需要原图，缩到 896 能显著降低上传耗时和 token 消耗；0 表示不缩放（小图会自动跳过缩放）",
+    "type": "int",
+    "default": 896
+  },
+  "llm_reasoning_effort": {
+    "description": "思考强度 low / medium / high / max，留空=不传该参数。打标是纯分类任务，glm-5.x 这类「始终思考」的模型默认会烧 400+ thinking token（实测单张 20 秒），设成 low 后 3.6 秒且标注结果一致。接口不支持时插件会自动退回默认值",
+    "type": "string",
+    "default": "low"
+  },
+  "steal_enabled": {
+    "description": "启用偷表情包：别人发 QQ 表情时 AI 会顺口问一句要不要收进库，用户说想要才收录；当图片发出来的表情图不主动问，你说要偷才收。关掉=完全不理会别人的表情。谁能偷由「只允许管理员偷」决定",
+    "type": "bool",
+    "default": false
+  },
+  "steal_admin_only": {
+    "description": "只允许管理员偷：关着=群里谁都能喊「偷这张」，收下的图照样先进待审核，不会直接进库；开着=只有管理员能触发",
+    "type": "bool",
+    "default": false
+  },
+  "steal_auto_approve": {
+    "description": "偷来的图直接进库：开=直接进库并排队打标；关=先放进「待审核」，在面板里点允许后才参与检索和发送",
+    "type": "bool",
+    "default": false
+  },
+  "steal_cooldown": {
+    "description": "偷表情冷却：同一个会话两次偷之间至少隔多少秒，防止被一张接一张地刷。0=不限制。同一条消息里连偷几张不算刷",
+    "type": "int",
+    "default": 30
+  },
+  "steal_daily_limit": {
+    "description": "每天最多偷几张：按入库时间统计，满额后当天不再收录，第二天自动恢复。0=不限制",
+    "type": "int",
+    "default": 20
+  },
+  "steal_max_mb": {
+    "description": "偷图体积上限：单位 MB，超过这个大小的图不下载",
+    "type": "int",
+    "default": 8
+  },
+  "auto_tag_on_upload": {
+    "description": "上传/导入后自动排队打标：关闭后所有图都需要在面板手动点「重打标」才会调用 LLM",
+    "type": "bool",
+    "default": true
+  },
   "sticker_frequency": {
     "description": "配图频率档位（提示词层）：AI 主动配图的整体倾向。关闭=不注入协议、AI 不会主动配图；很少=只在用户点名时发；适中=约每三四条回复一张；较多=大多数回复配图；每条都发=每条回复都配",
     "type": "string",
@@ -40,6 +107,26 @@
     "description": "快速通道总开关：AI 在回复末尾输出 <sticker> 标签即可自动配图（本地检索选图，一次回复就带图，不再多轮工具调用）；关掉后下方的配图频率档位也不再生效",
     "type": "bool",
     "default": true
+  },
+  "brief_mode": {
+    "description": "库存概览（分类注入）：把库存里有哪些情绪压成一行拼进 system_prompt，AI 不检索也知道有什么。自动=按张数自动挑到预算用完；手动=只注入面板「注入分类」页勾选的；关闭=不注入。注意 system_prompt 每轮都要重新发送和计费",
+    "type": "string",
+    "options": [
+      "自动",
+      "手动",
+      "关闭"
+    ],
+    "default": "自动"
+  },
+  "brief_budget": {
+    "description": "库存概览的 token 预算（保守估算）：这段内容每轮对话都会重新计费，超出预算的部分会自动截断。默认 100，够放十几个分类",
+    "type": "int",
+    "default": 100
+  },
+  "brief_groups": {
+    "description": "手动模式下要注入的情绪分类（逗号或顿号分隔）。一般不用手填，在面板「注入分类」页勾选即可",
+    "type": "string",
+    "default": ""
   },
   "delivery_mode": {
     "description": "投递方式：separate_after=文字先发、表情包再单独发一条（推荐，和陪伴插件一致）；same_message=表情包跟在文字同一条消息里。快速通道与搜索工具两条路径都遵守此项",
@@ -80,14 +167,44 @@
     "default": true
   },
   "fuzzy_search": {
-    "description": "模糊检索：关键词与名称/标签近似也能命中（如搜\"生气\"能带出\"哼气\"\"气鼓鼓\"等近似词），关闭后仅精确匹配",
+    "description": "模糊检索：允许「一字之差」的近似词命中（如「生气」带出「哼气」）。只对长度相近的词生效，关闭后仅精确/包含匹配，更保守但更不会发错图",
     "type": "bool",
     "default": true
   },
+  "min_score": {
+    "description": "自动发图的最低匹配分（0=按配图频档自动，适中档为 1.5）。分数低于它就不发图、只发文字。参考量级：主情绪命中 3.0、次情绪 1.5、画面标签 1.2，所以默认值意味着「至少要有情绪级证据」才自动发",
+    "type": "float",
+    "default": 0
+  },
+  "min_margin": {
+    "description": "第一名要领先第二名多少倍才算稳（0=按配图频档自动，适中档为 1.35）。领先不够说明候选之间分不清，宁可只发文字",
+    "type": "float",
+    "default": 0
+  },
+  "blocked_tags": {
+    "description": "危险标签（英文逗号分隔）：命中的图不会被自动发出（除非 AI 的检索词本身提到它），防止「病娇持刀」被当成「呆萌」发出去",
+    "type": "string",
+    "default": "威胁,血腥,恐怖,暴力,持刀,自杀"
+  },
   "top_k": {
-    "description": "检索时给 AI 的候选数量",
+    "description": "检索时给 AI 的候选数量。注意：工具返回会永久留在对话历史里，之后每一轮都要重新计费，4~6 条足够 AI 挑，调大只会更贵不会更准",
     "type": "int",
-    "default": 6
+    "default": 4
+  },
+  "search_detail": {
+    "description": "检索结果的详细程度（直接决定 token 开销）：精简=只给名称+主情绪（最省）；标准=加 36 字画面描述；完整=再加次情绪和置信度。快速通道不调用本工具，不受此项影响",
+    "type": "string",
+    "options": [
+      "精简",
+      "标准",
+      "完整"
+    ],
+    "default": "标准"
+  },
+  "list_page_size": {
+    "description": "sticker_list 每页返回条数。整页同样会写进对话历史并长期计费，建议 10 条以内",
+    "type": "int",
+    "default": 10
   },
   "send_cooldown_seconds": {
     "description": "发送冷却（秒）：同一会话两次发图的最小间隔，0 为不限。用户点名要表情包时可被下面的点名豁免跳过",

@@ -49,6 +49,19 @@
   .thumb { height:170px; background:#fff0f5; display:flex; align-items:center; justify-content:center; position:relative; }
   .thumb img { max-width:100%; max-height:100%; object-fit:contain; }
   .badge { position:absolute; top:6px; right:6px; font-size:11px; padding:1px 8px; border-radius:10px; background:#ffffffd9; border:1px solid var(--line); }
+  /* 批量选择：左上角勾选框 */
+  .pick { position:absolute; top:6px; left:6px; width:22px; height:22px; border-radius:7px; background:#ffffffd9; border:1px solid var(--line); display:flex; align-items:center; justify-content:center; cursor:pointer; font-size:12px; font-weight:700; color:transparent; transition:.15s; user-select:none; }
+  .pick:hover { border-color:var(--acc); background:#fff; }
+  .pick.on { background:var(--acc); border-color:var(--acc); color:#fff; }
+  .card.sel { border-color:var(--acc); box-shadow:0 0 0 2px #ff7fa966, 0 8px 20px #ff9fbd44; }
+  #bulkbar { background:#fff0f5a8; border:1px solid var(--line); border-radius:10px; padding:6px 12px; margin-bottom:10px; }
+  /* 勾选之后让批量条吸在顶上：选了几十张也不用滚回顶部才能删 */
+  #bulkbar.stuck { position:sticky; top:0; z-index:8; background:#fff0f5; backdrop-filter:blur(6px);
+                   border-radius:0 0 10px 10px; box-shadow:0 4px 16px #ff9fbd55; }
+  #bulkbar .btn { padding:4px 11px; font-size:12px; }
+  #bulkbar .btn:disabled { opacity:.4; cursor:default; transform:none; }
+  #bulkDel { min-width:118px; }
+  .row .btn.delbulk { border-color:var(--acc); color:#e2568a; font-weight:600; }
   .badge.complete { color:var(--ok); } .badge.pending { color:var(--pend); } .badge.failed,.badge.none { color:var(--bad); }
   .meta { padding:10px 12px; display:flex; flex-direction:column; gap:6px; flex:1; }
   .meta input.f { width:100%; background:transparent; border:none; border-bottom:1px solid transparent; color:var(--text); font-size:13px; padding:2px 0; outline:none; }
@@ -56,12 +69,18 @@
   .meta input.name { font-weight:600; font-size:14px; }
   .meta textarea { width:100%; background:transparent; border:1px solid transparent; color:var(--dim); font-size:12px; resize:vertical; min-height:34px; outline:none; font-family:inherit; }
   .meta textarea:focus { border-color:var(--line); color:var(--text); }
-  .row { display:flex; gap:6px; margin-top:auto; padding-top:6px; }
-  .row .btn { padding:3px 10px; font-size:12px; flex:0 0 auto; }
+  .tagline { font-size:11px; color:var(--dim); display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+  .tagline b { color:var(--acc); font-weight:600; }
+  .hchip { font-size:10px; padding:0 6px; border-radius:8px; color:var(--ok); border:1px solid var(--line); background:#fff0f5; }
+  .srctag { font-size:10px; padding:0 6px; border-radius:8px; color:var(--dim); border:1px solid var(--line); background:#fff; }
+  .srctag.steal { background:#ffe1ec; border-color:var(--acc); color:#b93a63; font-weight:600; }
+  .srctag.rejected { background:#fdeeea; border-color:var(--bad); color:var(--bad); }
+  .row { display:flex; gap:6px; margin-top:auto; padding-top:6px; flex-wrap:wrap; }
+  .row .btn { padding:3px 9px; font-size:12px; flex:0 0 auto; }
+  .row .count { margin-left:auto; white-space:nowrap; }
   .err { color:var(--bad); font-size:11px; }
   #toast { position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:#fff; border:1px solid var(--acc2); color:var(--text); padding:8px 20px; border-radius:10px; display:none; z-index:9; box-shadow:0 4px 16px #ff9fbd44; max-width:80vw; }
-  .empty { color:var(--dim); text-align:center; padding:60px 0; }
-  #askMask { position:fixed; inset:0; background:#5a3a4866; display:none; align-items:center; justify-content:center; z-index:99; }
+  .empty { color:var(--dim); text-align:center; padding:60px 0; }  #askMask { position:fixed; inset:0; background:#5a3a4866; display:none; align-items:center; justify-content:center; z-index:99; }
   #askMask.act { display:flex; }
   .ask { background:#fffdfa; border:1px solid var(--line); border-radius:12px; padding:20px 24px; width:min(340px, 88vw); box-shadow:0 10px 30px #ff9fbd66; }
   .askT { font-weight:600; margin-bottom:6px; color:#e2568a; }
@@ -94,8 +113,101 @@
   .cfgstat { flex:0 0 40px; font-size:11px; text-align:center; opacity:0; transition:.2s; }
   .cfgstat.show { opacity:1; }
   .cfgstat.ok { color:var(--ok); } .cfgstat.fail { color:var(--bad); }
+  /* 多选（候选打标模型）：一行放不下就换行，靠勾选态区分 */
+  .cfgmulti { flex:1 1 320px; flex-wrap:wrap; justify-content:flex-end; max-width:560px; }
+  .mpick { display:inline-flex; align-items:center; gap:5px; padding:3px 10px; border:1px solid var(--line);
+    border-radius:8px; background:#fff; font-size:12px; cursor:pointer; user-select:none; transition:.15s; max-width:100%; }
+  .mpick input { position:absolute; opacity:0; width:0; height:0; }
+  .mpick .mpl { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .mpick::before { content:'+'; color:var(--acc); font-weight:700; }
+  .mpick.on { border-color:var(--acc); background:#ffe9f1; }
+  .mpick.on .mpl { color:#c2416e; font-weight:600; }
+  .mpick.on::before { content:'✓'; }
+  .mpick:hover { border-color:var(--acc2); }
+  .mpick input:focus-visible + .mpl { outline:2px solid var(--acc2); outline-offset:2px; }
+  .mpskip { color:var(--dim); font-size:12px; font-style:italic; }
+  /* 队列页的模型池胶囊 */
+  .qmodels { display:flex; flex-wrap:wrap; gap:6px; margin-top:7px; }
+  .qmodels .qm { font-size:11px; padding:1px 9px; border-radius:20px; border:1px solid var(--line);
+    background:#fff; color:var(--dim); white-space:nowrap; }
+  .qmodels .qm i { font-style:normal; color:var(--acc); font-weight:600; }
+  .qmodels .qm.main { border-color:var(--acc); background:#ffe9f1; color:#c2416e; }
+  .qmodels .qm.down { border-color:var(--bad); background:#fdeeea; color:var(--bad); }
+  .qmodels .qm.down i { color:var(--bad); }
+  /* tab 上的待审核角标 */
+  .tabn { display:inline-block; min-width:16px; padding:0 5px; margin-left:5px; border-radius:9px;
+    background:var(--bad); color:#fff; font-size:10px; line-height:15px; text-align:center; vertical-align:1px; }
+  /* ---------- 按天视图 ---------- */
+  .daybox { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:12px 14px; margin-bottom:12px; }
+  .dayhead { display:flex; align-items:baseline; gap:10px; margin-bottom:9px; flex-wrap:wrap; }
+  .dayhead b { font-size:14px; color:#c2416e; }
+  .dayhead .dsub { font-size:11px; color:var(--dim); }
+  .daygrid { display:grid; grid-template-columns:repeat(auto-fill,minmax(102px,1fr)); gap:8px; }
+  .dcell { position:relative; border-radius:10px; overflow:hidden; background:#fff0f5;
+    border:1px solid var(--line); aspect-ratio:1/1; cursor:zoom-in; }
+  .dcell img { width:100%; height:100%; object-fit:cover; display:block; }
+  .dcell .dn { position:absolute; left:0; right:0; bottom:0; padding:8px 6px 2px; font-size:10px;
+    color:#fff; background:linear-gradient(transparent,#000000aa); white-space:nowrap;
+    overflow:hidden; text-overflow:ellipsis; }
+  .dcell .src { position:absolute; top:3px; left:3px; font-size:9px; padding:0 5px; border-radius:6px;
+    background:#ffffffd9; border:1px solid var(--line); color:var(--dim); }
+  .dcell .src.steal { background:#ffe1ec; border-color:var(--acc); color:#b93a63; font-weight:600; }
+  .dcell .src.rejected { background:#fdeeea; border-color:var(--bad); color:var(--bad); }
+  /* ---------- 待审核 ---------- */
+  .rvgrid { display:grid; grid-template-columns:repeat(auto-fill,minmax(178px,1fr)); gap:10px; }
+  .rvcard { background:#fff; border:1px solid var(--line); border-radius:12px; overflow:hidden;
+    display:flex; flex-direction:column; }
+  .rvcard.sel { border-color:var(--acc); box-shadow:0 0 0 2px #ff9fbd55; }
+  .rvimg { height:148px; background:#fff0f5; display:flex; align-items:center; justify-content:center;
+    position:relative; cursor:zoom-in; }
+  .rvimg img { max-width:100%; max-height:100%; object-fit:contain; }
+  .rvimg .rvpick { position:absolute; top:6px; left:6px; width:20px; height:20px; border-radius:50%;
+    border:1px solid var(--line); background:#ffffffdc; cursor:pointer; }
+  .rvimg .rvpick.on { background:var(--acc); border-color:var(--acc); }
+  .rvimg .rvpick.on::after { content:'✓'; color:#fff; font-size:12px; display:block; text-align:center; line-height:18px; }
+  .rvmeta { padding:7px 9px 4px; font-size:11px; }
+  .rvname { font-weight:600; margin-bottom:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .rvtip { color:var(--dim); font-size:10px; }
+  .rvact { display:flex; gap:5px; padding:2px 9px 9px; }
+  .rvact .btn { flex:1; padding:3px 0; font-size:12px; }
+  /* ---------- 看大图 ---------- */
+  #viewer { position:fixed; inset:0; background:#000000b8; display:none; align-items:center;
+    justify-content:center; z-index:99; cursor:zoom-out; }
+  #viewer.act { display:flex; }
+  #viewer img { max-width:92vw; max-height:86vh; border-radius:10px; box-shadow:0 12px 40px #0006; }
+  #viewer .vinfo { position:absolute; bottom:20px; left:50%; transform:translateX(-50%);
+    color:#fff; font-size:12px; background:#00000080; padding:5px 14px; border-radius:20px; white-space:nowrap; }
   .cfgfoot { display:flex; align-items:center; gap:10px; padding:6px 4px 0; }
   #cfgStat { font-size:12px; color:var(--dim); }
+  /* ---- 注入分类页 ---- */
+  .bbar { height:7px; background:#f6dbe6; border-radius:6px; margin-top:12px; overflow:hidden; }
+  .bbar i { display:block; height:100%; width:0; border-radius:6px; background:linear-gradient(90deg,var(--acc2),var(--acc)); transition:width .2s; }
+  .bbar i.over { background:var(--bad); }
+  .bbar i.hold { background:linear-gradient(90deg,#f0c87a,var(--pend)); }
+  .briefwarn { margin-top:10px; font-size:12px; color:var(--bad); background:#fff0ee; border:1px solid #f3c6c0; border-radius:8px; padding:8px 12px; }
+  .cats { display:flex; flex-wrap:wrap; gap:8px; }
+  .cat { display:flex; align-items:center; gap:5px; border:1px solid var(--line); background:#ffffffcc; border-radius:999px; padding:4px 12px; font-size:12px; cursor:pointer; user-select:none; transition:.15s; }
+  .cat:hover { border-color:var(--acc); transform:translateY(-1px); }
+  .cat.on { border-color:var(--acc); background:#ffe4ef; color:#e2568a; box-shadow:0 1px 6px #ff9fbd44; }
+  .cat.on::before { content:'✓'; font-size:10px; font-weight:700; }
+  .cat b { font-weight:600; }
+  .cat s { text-decoration:none; color:var(--dim); font-size:11px; }
+  .cat.on s { color:#e2568a; opacity:.7; }
+  .cat.dis { opacity:.4; cursor:default; }
+  .cat.dis:hover { transform:none; border-color:var(--line); }
+  .preview { background:#fff; border:1px dashed var(--line); border-radius:8px; padding:10px 12px; font:12px/1.75 Consolas,monospace; color:#7a5566; white-space:pre-wrap; word-break:break-all; min-height:40px; user-select:text; }
+  .preview.empty { color:var(--dim); font-style:italic; }
+  /* ---- 打标队列页 ---- */
+  .qgrid { display:grid; grid-template-columns:repeat(auto-fit,minmax(104px,1fr)); gap:10px; margin:12px 0 6px; }
+  .qstat { background:#fff; border:1px solid var(--line); border-radius:10px; padding:10px 12px; text-align:center; }
+  .qstat b { display:block; font-size:20px; color:#e2568a; font-weight:600; line-height:1.3; }
+  .qstat span { font-size:11px; color:var(--dim); }
+  .qlist { display:flex; flex-direction:column; gap:6px; max-height:330px; overflow:auto; }
+  .qrow { display:flex; align-items:center; gap:10px; font-size:12px; padding:6px 10px; border:1px solid #f8e3ec; border-radius:8px; background:#fff; }
+  .qrow .nm { font-weight:600; max-width:46%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .qrow .tm { margin-left:auto; color:var(--dim); font-size:11px; white-space:nowrap; }
+  .qrow .er { color:var(--bad); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .qpaused { background:#fff0ee; border:1px solid #f3c6c0; color:var(--bad); border-radius:8px; padding:8px 12px; font-size:12px; margin-bottom:10px; }
 </style>
 </head>
 <body>
@@ -103,6 +215,10 @@
 <div class="sub" id="status">加载中…</div>
 <div class="tabs">
   <div class="tab act" data-tab="stock">库存</div>
+  <div class="tab" data-tab="days">按天</div>
+  <div class="tab" data-tab="review">待审核<span class="tabn" id="tabReviewN" style="display:none">0</span></div>
+  <div class="tab" data-tab="queue">打标队列</div>
+  <div class="tab" data-tab="brief">注入分类</div>
   <div class="tab" data-tab="cfg">插件配置</div>
 </div>
 <div id="viewStock">
@@ -126,7 +242,117 @@
     <button class="btn chipf ok" data-f="complete">完成<span class="n"></span></button>
     <button class="btn warn" id="retryAll" style="display:none">重试所有失败</button>
   </div>
+  <div class="bar" id="bulkbar">
+    <span class="count">批量</span>
+    <button class="btn" id="bulkAll">全选当前结果</button>
+    <button class="btn" id="bulkInvert">反选</button>
+    <button class="btn" id="bulkClear">清空选择</button>
+    <span class="count" id="bulkCount">未选择</span>
+    <button class="btn warn" id="bulkDel" disabled style="margin-left:auto">删除选中</button>
+  </div>
   <div id="grid"><div class="empty">加载中…</div></div>
+</div>
+<div id="viewDays" style="display:none">
+  <div class="sub">按入库日期分组，快速翻看。左上角徽章是来源：<b>手动添加</b>（你上传的）/ 批量导入 / <b>偷的</b>（别人发 QQ 表情时收的）。点缩略图看大图。</div>
+  <div class="bar">
+    <input type="text" id="dq" placeholder="在按天视图里搜 名称/标签/情绪/描述…">
+    <button class="btn chips active" data-s="all">全部来源</button>
+    <button class="btn chips" data-s="steal">偷的</button>
+    <button class="btn chips" data-s="manual">手动添加</button>
+    <span class="count" id="dcount"></span>
+  </div>
+  <div id="dayList"><div class="empty">加载中…</div></div>
+</div>
+<div id="viewReview" style="display:none">
+  <div class="sub">偷来的表情包先落在这里，<b>允许之后才会参与检索和发送</b>。待审核阶段不打标（免得你白花一次 LLM 调用），点允许时才开始排队打标。<b>点拒绝会把图片和记录直接从库里删掉</b>，不可恢复。</div>
+  <div class="cfgsec">
+    <div class="bar">
+      <button class="btn ok" id="rvAll">全部允许</button>
+      <button class="btn" id="rvSelOk">允许选中</button>
+      <button class="btn warn" id="rvSelNo">拒绝并删除</button>
+      <span class="count" id="rvCount" style="margin-left:auto">读取中…</span>
+    </div>
+    <div class="cfghint" id="rvHint" style="margin-bottom:10px"></div>
+    <div class="rvgrid" id="rvGrid"><div class="empty">加载中…</div></div>
+  </div>
+</div>
+<div id="viewer"><img alt=""><div class="vinfo"></div></div>
+<div id="viewQueue" style="display:none">
+  <div class="sub">打标队列的实时状态。<b>暂停只拦「下一张」</b>，已经在跑的那几张会跑完（HTTP 请求没法安全中断，硬掐会让那条永远卡在「打标中」）。</div>
+  <div class="cfgsec">
+    <div class="cfgsec-t">总览</div>
+    <div class="qpaused" id="qPausedBar">已暂停：队列里的图不会往下跑，点「继续打标」接着来。</div>
+    <div class="qgrid">
+      <div class="qstat"><b id="qActive">0</b><span>进行中</span></div>
+      <div class="qstat"><b id="qQueued">0</b><span>排队中</span></div>
+      <div class="qstat"><b id="qDone">0</b><span>本次已完成</span></div>
+      <div class="qstat"><b id="qFailed">0</b><span>失败</span></div>
+      <div class="qstat"><b id="qRate">—</b><span>速度</span></div>
+      <div class="qstat"><b id="qEta">—</b><span>预计剩余</span></div>
+    </div>
+    <div class="bbar"><i id="qFill"></i></div>
+    <div class="cfghint" id="qMeta" style="margin-top:8px"></div>
+    <div class="qmodels" id="qModels"></div>
+    <div class="bar" style="margin:12px 0 0">
+      <button class="btn warn" id="qPause">暂停打标</button>
+      <button class="btn" id="qClear" title="把还没开始跑的从队列里撤掉，状态退回「未打标」，不会删图">清空待打标</button>
+      <button class="btn ok" id="qRetryFail">重试全部失败</button>
+      <button class="btn" id="qRetryNone" title="把还没打过标的图全部排进队列">打标未打标的</button>
+      <span class="count" id="qStat" style="margin-left:auto"></span>
+    </div>
+  </div>
+  <div class="cfgsec">
+    <div class="cfgsec-t">进行中 <span class="count" id="qActiveN"></span></div>
+    <div class="qlist" id="qActiveList"><span class="count">当前没有正在跑的</span></div>
+  </div>
+  <div class="cfgsec">
+    <div class="cfgsec-t">排队中 <span class="count" id="qQueuedN"></span></div>
+    <div class="qlist" id="qQueuedList"><span class="count">队列是空的</span></div>
+  </div>
+  <div class="cfgsec" id="qFailBox" style="display:none">
+    <div class="cfgsec-t">失败 <span class="count" id="qFailN"></span></div>
+    <div class="qlist" id="qFailList"></div>
+    <div class="cfghint" style="margin-top:8px">失败多半是 API 限流、模型不支持看图、或 Key 失效。冷却时间过了点「重试全部失败」即可。</div>
+  </div>
+</div>
+<div id="viewBrief" style="display:none">
+  <div class="sub">这里的设置只影响每轮拼进 <b>system_prompt</b> 的那一行「库存概览」：让 AI 一开始就知道库存里有什么情绪，不用先检索一遍。</div>
+  <div class="cfgsec">
+    <div class="cfgsec-t">概览设置</div>
+    <div class="cfghint">system_prompt 不会存在模型那边 —— 每轮请求都要把完整上下文重新发一次、重新计费，所以这段是<b>每轮固定成本</b>，按预算截断。</div>
+    <div class="bar" style="margin:10px 0 0">
+      <select id="briefMode" class="cfgsel" style="width:128px">
+        <option value="自动">自动挑选</option>
+        <option value="手动">手动挑选</option>
+        <option value="关闭">关闭注入</option>
+      </select>
+      <span class="count">预算</span>
+      <input type="number" id="briefBudget" class="cfgnum" min="20" max="600" step="10">
+      <span class="count">token（估算）</span>
+      <span class="count" id="briefUse" style="margin-left:auto"></span>
+    </div>
+    <div class="bbar"><i id="briefFill"></i></div>
+    <div class="briefwarn" id="briefWarn" style="display:none">当前库存已达到预算上限！请去设置里自行调整</div>
+  </div>
+  <div class="cfgsec">
+    <div class="cfgsec-t">情绪分类（点一下加入 / 移出）</div>
+    <div class="cats" id="briefCats"><span class="count">加载中…</span></div>
+    <div class="bar" style="margin:12px 0 0">
+      <button class="btn" id="briefAutoFill">用自动结果</button>
+      <button class="btn" id="briefNone">全不选</button>
+    </div>
+    <div class="cfghint" style="margin-top:8px">括号里是库存张数。自动模式下点任意分类会切换成手动，并从当前的自动结果继续调。</div>
+  </div>
+  <div class="cfgsec">
+    <div class="cfgsec-t">实际拼进去的内容</div>
+    <pre class="preview" id="briefPreview"></pre>
+    <div class="cfghint" style="margin-top:8px" id="briefNote"></div>
+  </div>
+  <div class="bar">
+    <button class="btn ok" id="briefSave">保存并生效</button>
+    <button class="btn" id="briefReload">重新统计</button>
+    <span class="count" id="briefStat"></span>
+  </div>
 </div>
 <div id="viewCfg" style="display:none">
   <div class="sub">改动后自动保存并立即生效，无需重启</div>
@@ -151,6 +377,10 @@ const $ = s => document.querySelector(s);
 const API = '/api/plug/astrbot_plugin_sticker_kit';
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let ITEMS = [];
+let VIEW = [];             // 当前渲染出来的顺序：全选 / Shift 连选都按它走
+const SEL = new Set();     // 已勾选的 id（跨筛选保留）
+let lastPick = -1;         // 上次点勾选框的下标，Shift 连选用
+let stPaused = false;      // 打标队列是否暂停（库存页提示用）
 let FILTER = 'all';
 const STATUS_TXT = { complete:'完成', pending:'打标中', failed:'失败', none:'未打标' };
 
@@ -192,11 +422,12 @@ function toast(msg, bad) {
 }
 
 /* 桌面端 webview 沙箱禁掉了 window.confirm（直接返回 false，点了像没反应），自己画一个 */
-function askConfirm(title, detail) {
+function askConfirm(title, detail, okText) {
   return new Promise((resolve) => {
     const mask = $('#askMask');
     $('#askTitle').textContent = title;
     $('#askDetail').textContent = detail || '';
+    $('#askOk').textContent = okText || '删除';
     mask.classList.add('act');
     const done = (ok) => {
       mask.classList.remove('act');
@@ -213,29 +444,86 @@ function askConfirm(title, detail) {
 
 /* ---------- 标签页切换（配置并进本页，不再跨页跳转） ---------- */
 let cfgLoaded = false;
+let briefLoaded = false;
+let queueLoaded = false;
 function switchTab(name) {
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('act', t.dataset.tab === name));
   $('#viewStock').style.display = name === 'stock' ? '' : 'none';
+  $('#viewQueue').style.display = name === 'queue' ? '' : 'none';
+  $('#viewBrief').style.display = name === 'brief' ? '' : 'none';
   $('#viewCfg').style.display = name === 'cfg' ? '' : 'none';
+  $('#viewDays').style.display = name === 'days' ? '' : 'none';
+  $('#viewReview').style.display = name === 'review' ? '' : 'none';
+  if (name === 'queue') { qOn = true; queueLoaded = true; loadQueue(); }
+  else { qOn = false; clearTimeout(qTimer); }   // 离开队列页就停轮询，别在后台一直拉
+  if (name === 'brief' && !briefLoaded) { briefLoaded = true; loadBrief(); }
   if (name === 'cfg' && !cfgLoaded) { cfgLoaded = true; loadCfg(); }
+  if (name === 'days') renderDays();
+  if (name === 'review') loadReview();
 }
 document.querySelectorAll('.tab').forEach(t => t.onclick = () => switchTab(t.dataset.tab));
 
 /* ================= 库存 ================= */
-async function load() {
-  $('#grid').innerHTML = '<div class="empty">加载中…</div>';
+let pollTimer = 0;
+
+/* ---- 滚动位置保持 ----
+   保存/删除后要重新拉列表重画。旧版这里会先把 grid 换成一行「加载中…」，
+   页面高度在等待网络的那一瞬间塌掉，浏览器把 scrollTop 夹到新的最大值，
+   等卡片回来就停在上面了 —— 用起来就是"点一下按钮就跳回顶部"。
+   现在：已有内容时不再捣空 grid，另外记住位置、重画后补回来（只补被夹掉的那部分，
+   用户在这期间自己滚动了就不打扰）。 */
+let SCROLL_Y = 0;
+function snapScroll() {
+  SCROLL_Y = window.pageYOffset || document.documentElement.scrollTop || 0;
+  return SCROLL_Y;
+}
+function restoreScroll(y) {
+  const t = typeof y === 'number' ? y : SCROLL_Y;
+  if (!(t > 0)) return;
+  const put = () => {
+    const cur = window.pageYOffset || document.documentElement.scrollTop || 0;
+    if (cur < t - 4) { try { window.scrollTo(0, t); } catch (_) {} }
+  };
+  put();
+  requestAnimationFrame(put);
+  setTimeout(put, 90);
+}
+
+async function load(silent) {
+  snapScroll();
+  const firstPaint = !ITEMS.length;
+  if (!silent && firstPaint) $('#grid').innerHTML = '<div class="empty">加载中…</div>';
   try {
     const d = await apiGet('api/list');
     ITEMS = d.items || [];
-    $('#status').innerHTML = d.llm_ready
-      ? '打标 LLM：<b>已配置</b>（上传后自动打标）'
-      : '打标 LLM：<i>未配置</i>（切到「插件配置」填 llm_api_key 后可自动打标）';
+    const q = d.queue || {};
+    stPaused = !!q.paused;
+    const busyQ = (q.queued || 0) + (q.active || 0);
+    let head = d.llm_ready
+      ? `打标 LLM：<b>${esc(d.llm || '已配置')}</b>（上传后自动打标）`
+      : '打标 LLM：<i>未配置</i>（切到「插件配置 → LLM 视觉打标」，手填 API 或直接选一个 AstrBot 提供商）';
+    if (d.llm_ready && (busyQ || (q.pending || 0) || (q.failed || 0) || q.paused)) {
+      head += `<br>打标队列：进行 <b>${q.active || 0}</b> · 排队 <b>${q.queued || 0}</b> · 未完成 ${q.pending || 0} · 失败 ${q.failed || 0} · 并发 ${q.workers || 0}`;
+      if (q.cooldown > 0) head += ` · <span style="color:var(--pend)">上游冷却 ${Math.ceil(q.cooldown)}s</span>`;
+      if (q.paused) head += ` · <span style="color:var(--pend)">已暂停</span>`;
+      if (q.eta > 0) head += ` · 预计还需 ${fmtDur(q.eta)}`;
+    }
+    $('#status').innerHTML = head;
     if (d.data_dir) {
       $('#pathline').innerHTML = '数据保存在：<code>' + esc(d.data_dir) + '</code>　标注在 index.json，图片在 images/ 子目录　·　卡片上的「保存」= 把改好的标注写进 index.json，图片本身上传时就已存到 images/';
     }
     render();
+    updateReviewBadge();
+    restoreScroll();
+    /* 有打标任务在进行时自动刷新进度；用户正在输入框里改东西就先不刷新，免得把手改内容冲掉 */
+    clearTimeout(pollTimer);
+    if (busyQ) {
+      const editing = document.activeElement && document.activeElement.closest && document.activeElement.closest('#grid');
+      pollTimer = setTimeout(() => load(true), editing ? 5000 : 2500);
+    }
   } catch (e) {
-    $('#grid').innerHTML = '<div class="empty">加载失败：' + esc(e.message || e) + '</div>';
+    if (firstPaint) $('#grid').innerHTML = '<div class="empty">加载失败：' + esc(e.message || e) + '</div>';
+    else toast(e.message || '刷新失败', true);
   }
 }
 
@@ -286,6 +574,13 @@ function render() {
     (FILTER === 'all' || stOf(it) === FILTER) &&
     (!q || [it.name, (it.tags||[]).join(' '), it.description, (it.emotions||[]).join(' '), it.visible_text||''].join(' ').toLowerCase().includes(q))
   );
+  /* 选择集按 id 存，重画/切筛选都不丢；库里已经不存在的顺手剔掉 */
+  if (SEL.size) {
+    const alive = new Set(ITEMS.map(x => x.id));
+    for (const id of [...SEL]) if (!alive.has(id)) SEL.delete(id);
+  }
+  VIEW = list;
+  if (lastPick >= list.length) lastPick = -1;   // 删过东西后别让 Shift 连选从错位的下标开始
   const cnt = {};
   for (const it of ITEMS) { const s = stOf(it); cnt[s] = (cnt[s]||0) + 1; }
   document.querySelectorAll('.chipf').forEach(c => {
@@ -302,49 +597,172 @@ function render() {
     grid.innerHTML = FILTER === 'failed' && !q
       ? '<div class="empty">没有失败的，都是好孩子~</div>'
       : '<div class="empty">' + (ITEMS.length ? '没有匹配的表情包' : '没有表情包，先上传几张吧') + '</div>';
+    syncSel();
     return;
   }
   grid.innerHTML = '';
-  for (const it of list) {
+  for (let i = 0; i < list.length; i++) {
+    const it = list[i];
     const st = stOf(it);
+    const emos = it.emotions || [];
+    const primary = emos[0] || '';
+    const second = emos.slice(1).join('、');
+    const conf = typeof it.confidence === 'number' ? it.confidence : null;
+    const human = it.human || [];
     const card = document.createElement('div');
     card.className = 'card';
+    card.dataset.id = it.id;
     card.innerHTML = `
       <div class="thumb"><img alt="" loading="lazy">
+        <span class="pick" title="选中（Shift 可连选一段）"></span>
         <span class="badge ${st}">${STATUS_TXT[st] || st}</span></div>
       <div class="meta">
+        <div class="tagline">
+          <span class="srctag ${srcClass(it)}">${esc(srcText(it))}</span>
+          <span>主情绪 <b>${esc(primary || '未标')}</b></span>
+          ${second ? `<span>· 次 ${esc(second)}</span>` : ''}
+          ${conf != null ? `<span>· 置信 ${conf.toFixed(2)}</span>` : ''}
+          ${it.usage_count ? `<span>· 用过 ${it.usage_count} 次</span>` : ''}
+          ${human.length ? `<span class="hchip" title="已手改：${esc(human.join('/'))}，重打标不会覆盖">手改</span>` : ''}
+        </div>
         <input class="f name" value="${esc(it.name||'')}" placeholder="名称">
-        <input class="f emo" value="${esc((it.emotions||[]).join('、'))}" placeholder="情绪（顿号分隔）">
-        <input class="f tags" value="${esc((it.tags||[]).join('、'))}" placeholder="标签（顿号分隔）">
+        <input class="f emo" value="${esc(emos.join('、'))}" placeholder="情绪（顿号分隔，第一个=主情绪）">
+        <input class="f tags" value="${esc((it.tags||[]).join('、'))}" placeholder="画面关键词（顿号分隔）">
         <textarea class="f desc" placeholder="描述">${esc(it.description||'')}</textarea>
         <textarea class="f vtext" placeholder="图上文字">${esc(it.visible_text||'')}</textarea>
         ${it.analysis_error ? `<div class="err">${esc(it.analysis_error)}</div>` : ''}
         <div class="row">
           <button class="btn ok save">保存</button>
-          <button class="btn re">重打标</button>
+          <button class="btn re" title="重新调用视觉模型；已手改的字段会保留">重打标</button>
           <button class="btn dl">下载</button>
           <button class="btn warn del">删除</button>
-          <span class="count" style="margin-left:auto">${it.usage_count||0}次</span>
         </div>
       </div>`;
     thumbSrc(it).then(src => { if (src) card.querySelector('img').src = src; });
+    card.querySelector('.pick').onclick = (e) => {
+      e.stopPropagation();
+      togglePick(i, it.id, e.shiftKey);
+    };
     card.querySelector('.save').onclick = () => save(it, card);
     card.querySelector('.re').onclick = async () => {
-      try { await apiPost('api/analyze', {id: it.id}); toast('已加入打标队列'); }
+      try {
+        await apiPost('api/analyze', {id: it.id});
+        toast(stPaused ? '已加入队列（当前暂停中，去「打标队列」点继续后才会跑）' : '已加入打标队列');
+      }
       catch (e) { toast(e.message || '失败', true); }
-      load();
+      load(true);
     };
     card.querySelector('.dl').onclick = () => downloadImage(it);
     card.querySelector('.del').onclick = async () => {
-      const ok = await askConfirm('删除「' + (it.name||'') + '」？', '图片文件和标注会一起删掉，不可恢复。');
+      // 这张已被勾选 -> 按批量删（连同其它选中的一起）；没勾选 -> 只删这一张
+      const bulk = SEL.has(it.id);
+      const ids = bulk ? [...SEL] : [it.id];
+      const ok = await askConfirm(
+        bulk ? `删除选中的 ${ids.length} 张？` : '删除「' + (it.name || '') + '」？',
+        '图片文件和标注会一起删掉，不可恢复。');
       if (!ok) return;
-      try { await apiPost('api/delete', {id: it.id}); toast('已删除'); }
-      catch (e) { toast(e.message || '失败', true); }
-      load();
+      snapScroll();
+      try {
+        if (bulk) {
+          const d = await apiPost('api/delete_batch', { ids });
+          SEL.clear();
+          lastPick = -1;
+          toast(`已删除 ${d.deleted || 0} 张` + (d.missing ? `，${d.missing} 张已不存在` : ''));
+        } else {
+          await apiPost('api/delete', { id: it.id });
+          toast('已删除');
+        }
+      } catch (e) {
+        toast(e.message || '失败', true);
+      }
+      load(true);
     };
     grid.appendChild(card);
   }
+  syncSel();
 }
+
+/* ---------- 批量选择 ---------- */
+/* 切筛选/改搜索就清空：勾选永远等于"眼前这些"，避免看不见的项被一起删掉 */
+function clearPick() { SEL.clear(); lastPick = -1; }
+
+function togglePick(idx, id, shift) {
+  if (shift && lastPick >= 0) {
+    const on = !SEL.has(id);
+    const a = Math.min(lastPick, idx), b = Math.max(lastPick, idx);
+    for (let i = a; i <= b; i++) {
+      const x = VIEW[i];
+      if (!x) continue;
+      if (on) SEL.add(x.id); else SEL.delete(x.id);
+    }
+  } else if (SEL.has(id)) SEL.delete(id);
+  else SEL.add(id);
+  lastPick = idx;
+  syncSel();
+}
+
+/* 只改 class，不重画卡片 —— 重画会把用户还没保存的输入冲掉 */
+function syncSel() {
+  const n = SEL.size;
+  $('#grid').querySelectorAll('.card').forEach(c => {
+    const on = SEL.has(c.dataset.id);
+    c.classList.toggle('sel', on);
+    const p = c.querySelector('.pick');
+    if (p) p.classList.toggle('on', on);
+    // 已选中的卡片：删除按钮就地变成"删掉这 N 张"，不用滚回顶部找批量条
+    const del = c.querySelector('.del');
+    if (del) {
+      del.classList.toggle('delbulk', on);
+      del.textContent = on ? `删除(${n})` : '删除';
+      del.title = on ? `这张已选中，点它会一起删掉全部 ${n} 张` : '删除这一张';
+    }
+  });
+  const bar = $('#bulkbar');
+  if (bar) bar.classList.toggle('stuck', n > 0);   // 有勾选就吸顶跟随
+  $('#bulkCount').textContent = n ? `已选 ${n} 张` : '未选择';
+  const del = $('#bulkDel');
+  del.disabled = !n;
+  del.textContent = n ? `删除选中（${n}）` : '删除选中';
+  const allOn = VIEW.length > 0 && VIEW.every(x => SEL.has(x.id));
+  $('#bulkAll').textContent = allOn ? '取消全选' : '全选当前结果';
+}
+
+$('#bulkAll').onclick = () => {
+  const allOn = VIEW.length > 0 && VIEW.every(x => SEL.has(x.id));
+  VIEW.forEach(x => { if (allOn) SEL.delete(x.id); else SEL.add(x.id); });
+  lastPick = -1;
+  syncSel();
+};
+$('#bulkInvert').onclick = () => {
+  VIEW.forEach(x => { if (SEL.has(x.id)) SEL.delete(x.id); else SEL.add(x.id); });
+  lastPick = -1;
+  syncSel();
+};
+$('#bulkClear').onclick = () => { clearPick(); syncSel(); };
+
+$('#bulkDel').onclick = async () => {
+  const ids = [...SEL];
+  if (!ids.length) return;
+  const ok = await askConfirm(`删除选中的 ${ids.length} 张？`, '图片文件和标注会一起删掉，不可恢复。正在打标的会一并取消。');
+  if (!ok) return;
+  const btn = $('#bulkDel');
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '删除中…';
+  try {
+    const d = await apiPost('api/delete_batch', { ids });
+    SEL.clear();
+    lastPick = -1;
+    let msg = `已删除 ${d.deleted || 0} 张`;
+    if (d.missing) msg += `，${d.missing} 张已不存在`;
+    toast(msg);
+  } catch (e) {
+    toast(e.message || '批量删除失败', true);
+    btn.textContent = label;
+  }
+  snapScroll();
+  load(true);
+};
 
 async function save(it, card) {
   const val = c => c.value.trim();
@@ -358,7 +776,8 @@ async function save(it, card) {
   };
   try { await apiPost('api/update', body); toast('已保存到库（index.json）'); }
   catch (e) { toast(e.message||'失败', true); }
-  load();
+  snapScroll();
+  load(true);
 }
 
 document.querySelectorAll('.chipf').forEach(c => {
@@ -366,6 +785,7 @@ document.querySelectorAll('.chipf').forEach(c => {
     FILTER = c.dataset.f;
     document.querySelectorAll('.chipf').forEach(x => x.classList.remove('active'));
     c.classList.add('active');
+    clearPick();
     render();
   };
 });
@@ -378,7 +798,7 @@ $('#retryAll').onclick = async () => {
     try { await apiPost('api/analyze', { id: it.id }); } catch (e) {}
   }
   toast('已全部重新排队打标');
-  load();
+  load(true);
 };
 
 const drop = $('#drop');
@@ -464,7 +884,11 @@ async function upload(files) {
     let d;
     if (b) {
       d = { saved: 0, duplicated: [], rejected: [] };
+      let done = 0;
       for (const f of files) {
+        done++;
+        /* 100 张走桥接只能一张一张传，必须给进度，否则看起来像卡死 */
+        if (files.length > 1) toast(`上传中 ${done}/${files.length}：${f.name || ''}`);
         const r = await b.upload('api/upload', f);
         const part = r || {};
         d.saved += part.saved || (part.saved_one ? 1 : 0);
@@ -483,14 +907,14 @@ async function upload(files) {
     if ((d.rejected||[]).length) msg += `，拒绝 ${d.rejected.length} 张（${d.rejected[0]}）`;
     if (d.llm_ready === false) msg += `；打标 LLM 未配置，稍后可在「插件配置」里填好再逐张「重打标」`;
     toast(msg, (d.saved||0) === 0);
-    load();
+    load(true);
   } catch (e) {
     toast(e.message || '上传失败', true);
   }
 }
 
-$('#q').oninput = render;
-$('#reload').onclick = load;
+$('#q').oninput = () => { clearPick(); render(); };
+$('#reload').onclick = () => load();
 
 /* 宿主嵌入时提示拖拽限制（无跳转按钮——iframe sandbox 没给 allow-popups，任何弹窗/新标签打开都会被拦） */
 try {
@@ -509,12 +933,537 @@ $('#importDir').onclick = async () => {
     if (d.truncated) msg += `；目录太大，只取前 ${d.scanned} 张`;
     toast(msg, d.saved === 0);
     if (d.saved) $('#dirpath').value = '';
-    load();
+    load(true);
   } catch (e) {
     toast(e.message || '导入失败', true);
   }
 };
 $('#dirpath').onkeydown = e => { if (e.key === 'Enter') $('#importDir').click(); };
+
+/* ================= 注入分类（库存概览） ================= */
+const BRIEF_LABEL = { auto:'自动', manual:'手动', off:'关闭' };
+const BRIEF_KEY = { '自动':'auto', '手动':'manual', '关闭':'off' };
+let bState = { mode:'自动', budget:100, picked:new Set(), cats:[] };
+let briefTimer = 0;
+
+function paintCats() {
+  const box = $('#briefCats');
+  if (!bState.cats.length) {
+    box.innerHTML = '<span class="count">库存里还没有情绪标注，先给表情包打标吧</span>';
+    return;
+  }
+  const off = bState.mode === '关闭';
+  box.innerHTML = bState.cats.map(c => {
+    const on = bState.picked.has(c.word);
+    return `<span class="cat${on ? ' on' : ''}${off ? ' dis' : ''}" data-w="${esc(c.word)}" title="${esc(c.word)} · ${c.count} 张">` +
+           `<b>${esc(c.word)}</b><s>×${c.count}</s></span>`;
+  }).join('');
+}
+
+function paintBrief(d) {
+  const budget = Math.max(1, parseInt(d.budget || bState.budget, 10) || 100);
+  const used = d.used || 0;
+  const allUsed = d.all_used || 0;
+  const demandOver = d.mode === 'manual' && allUsed > budget;
+
+  // 手动超预算时按"全放进去需要多少"显示，否则进度条看着还有余量、保存却报错
+  const shown = demandOver ? allUsed : used;
+  $('#briefUse').textContent = `约 ${shown} / ${budget} token`;
+  const fill = $('#briefFill');
+  fill.style.width = Math.min(100, Math.round(shown / budget * 100)) + '%';
+  fill.classList.toggle('over', demandOver);
+
+  const pre = $('#briefPreview');
+  pre.textContent = d.preview || '（不注入 —— 关闭模式，或库存里没有可用的情绪分类）';
+  pre.classList.toggle('empty', !d.preview);
+
+  $('#briefWarn').style.display = demandOver ? 'block' : 'none';
+
+  const total = bState.cats.length;
+  const picked = (d.picked || []).length;
+  let note = '';
+  if (d.mode === 'off') note = '已关闭注入，不占任何 token。';
+  else if (demandOver) note = `勾选的分类全放进去约 ${allUsed} token，超出预算 ${budget}。取消一些分类，或把预算调高。`;
+  else if (d.truncated) note = `预算已满，还有 ${Math.max(0, total - picked)} 个分类没放进去（张数少的先被截掉）。`;
+  else if (picked < total) note = `已选 ${picked} / ${total} 个分类，全部放进去了。`;
+  else note = `共 ${total} 个分类，已全部放进去了。`;
+  $('#briefNote').textContent = note;
+}
+
+async function loadBrief() {
+  try {
+    const d = await apiGet('api/brief');
+    bState.cats = d.categories || [];
+    bState.mode = BRIEF_LABEL[d.mode] || '自动';
+    bState.budget = d.budget || 100;
+    bState.picked = new Set((d.categories || []).filter(c => c.selected).map(c => c.word));
+    $('#briefMode').value = bState.mode;
+    $('#briefBudget').value = bState.budget;
+    paintCats();
+    paintBrief({ ...d, mode: d.mode });
+    $('#briefStat').textContent = d.over
+      ? '当前选择已超预算'
+      : (d.protocol_on === false ? '快速通道已关闭，概览不会注入'
+        : (d.frequency === 'off' ? '配图频率是「关闭」，概览不会注入' : ''));
+  } catch (e) {
+    $('#briefCats').innerHTML = '<span class="count">加载失败：' + esc(e.message || e) + '</span>';
+  }
+}
+
+function briefPayload() {
+  return { mode: bState.mode, budget: bState.budget, groups: [...bState.picked] };
+}
+
+/* 勾选/改预算后先本地回显，再让服务端算真实 token（不落盘） */
+function syncBrief(delay) {
+  clearTimeout(briefTimer);
+  briefTimer = setTimeout(async () => {
+    try {
+      const d = await apiPost('api/brief/set', { ...briefPayload(), dry: true });
+      if (bState.mode === '自动') {
+        // 自动模式下服务端会重新挑，回填它的选择
+        bState.picked = new Set(d.picked || []);
+        paintCats();
+      }
+      paintBrief(d);
+    } catch (e) {
+      toast(e.message || '计算失败', true);
+    }
+  }, delay == null ? 220 : delay);
+}
+
+$('#briefCats').onclick = (e) => {
+  const el = e.target.closest('.cat');
+  if (!el || bState.mode === '关闭') return;
+  if (bState.mode === '自动') bState.mode = '手动';  // 从自动结果接着调
+  const w = el.dataset.w;
+  if (bState.picked.has(w)) bState.picked.delete(w); else bState.picked.add(w);
+  $('#briefMode').value = bState.mode;
+  paintCats();
+  syncBrief();
+};
+
+$('#briefMode').onchange = () => {
+  bState.mode = $('#briefMode').value;
+  if (bState.mode === '手动' && !bState.picked.size) {
+    // 从手动空选开始最容易一头雾水：先按自动结果垫一份
+    bState.picked = new Set(bState.cats.filter(c => c.selected).map(c => c.word));
+  }
+  paintCats();
+  syncBrief(0);
+};
+
+$('#briefBudget').oninput = () => {
+  const v = parseInt($('#briefBudget').value, 10);
+  if (!v || v < 20) return;
+  bState.budget = Math.min(600, v);
+  syncBrief(420);
+};
+
+$('#briefNone').onclick = () => {
+  bState.mode = '手动';
+  bState.picked = new Set();
+  $('#briefMode').value = '手动';
+  paintCats();
+  syncBrief(0);
+};
+
+$('#briefAutoFill').onclick = () => {
+  bState.mode = '自动';
+  $('#briefMode').value = '自动';
+  syncBrief(0);
+};
+
+$('#briefReload').onclick = () => loadBrief();
+
+$('#briefSave').onclick = async () => {
+  const btn = $('#briefSave');
+  btn.disabled = true;
+  $('#briefStat').textContent = '保存中…';
+  try {
+    const d = await apiPost('api/brief/set', briefPayload());
+    toast('已保存，下一轮对话生效');
+    $('#briefStat').textContent = `已保存 · 约 ${d.used}/${d.budget} token`;
+    $('#briefWarn').style.display = 'none';
+  } catch (e) {
+    toast(e.message || '保存失败', true);
+    $('#briefStat').textContent = '';
+  } finally {
+    btn.disabled = false;
+  }
+};
+
+/* ================= 看大图 ================= */
+const VIEWER = $('#viewer');
+function openViewer(it) {
+  const img = VIEWER.querySelector('img');
+  VIEWER.querySelector('.vinfo').textContent =
+    `${it.name || '未命名'}　·　${it.source_label || ''}　·　${fmtDay(it.created_at)}`;
+  VIEWER.classList.add('act');
+  img.removeAttribute('src');
+  thumbSrc(it).then(src => { if (src) img.src = src; });
+}
+VIEWER.onclick = () => { VIEWER.classList.remove('act'); VIEWER.querySelector('img').removeAttribute('src'); };
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') VIEWER.onclick();
+});
+
+/* ================= 按天 ================= */
+let DAY_SRC = 'all';
+let DAY_Q = '';
+
+const pad2 = n => String(n).padStart(2, '0');
+function dayKey(ts) {
+  const t = Number(ts);
+  if (!t || !isFinite(t)) return '未知日期';
+  const d = new Date(t * 1000);
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+function fmtDay(ts) {
+  const k = dayKey(ts);
+  if (k === '未知日期') return k;
+  const today = dayKey(Date.now() / 1000);
+  if (k === today) return '今天 ' + k;
+  const y = new Date(Date.now() - 86400000);   // 注意是毫秒
+  if (k === `${y.getFullYear()}-${pad2(y.getMonth() + 1)}-${pad2(y.getDate())}`) return '昨天 ' + k;
+  return k;
+}
+function srcClass(it) {
+  if (it.review === 'rejected') return 'rejected';
+  return it.source === 'steal' ? 'steal' : '';
+}
+function srcText(it) {
+  if (it.review === 'rejected') return '已拒绝';
+  if (it.review === 'pending') return '待审核';
+  return it.source_label || '未知';
+}
+
+function renderDays() {
+  const q = (DAY_Q || '').trim().toLowerCase();
+  const hit = it => {
+    if (DAY_SRC === 'steal' && it.source !== 'steal') return false;
+    if (DAY_SRC === 'manual' && it.source === 'steal') return false;
+    if (!q) return true;
+    return [it.name, (it.tags || []).join(' '), it.description, (it.emotions || []).join(' '),
+            it.visible_text || ''].join(' ').toLowerCase().includes(q);
+  };
+  const list = (ITEMS || []).filter(hit);
+  const box = $('#dayList');
+  $('#dcount').textContent = list.length ? `${list.length} 张` : '';
+  if (!list.length) {
+    box.innerHTML = `<div class="empty">${(ITEMS || []).length ? '没有匹配的表情包' : '还没有表情包'}</div>`;
+    return;
+  }
+  const groups = new Map();
+  for (const it of list) {
+    const k = dayKey(it.created_at);
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(it);
+  }
+  // 日期倒序，未知日期垫底
+  const keys = [...groups.keys()].sort((a, b) => {
+    if (a === '未知日期') return 1;
+    if (b === '未知日期') return -1;
+    return a < b ? 1 : -1;
+  });
+  box.innerHTML = keys.map(k => {
+    const arr = groups.get(k);
+    const steal = arr.filter(x => x.source === 'steal').length;
+    const cells = arr.map(it => {
+      const cls = srcClass(it);
+      return `<div class="dcell" data-id="${esc(it.id)}" title="${esc((it.name || '') + ' · ' + srcText(it))}">
+        <img alt="" loading="lazy">
+        <span class="src ${cls}">${esc(srcText(it))}</span>
+        <span class="dn">${esc(it.name || '未命名')}</span>
+      </div>`;
+    }).join('');
+    const tag = steal ? `　·　其中偷的 <b>${steal}</b> 张` : '';
+    return `<div class="daybox"><div class="dayhead">
+      <b>${esc(fmtDay(arr[0].created_at))}</b>
+      <span class="dsub">${arr.length} 张${tag}</span></div>
+      <div class="daygrid">${cells}</div></div>`;
+  }).join('');
+
+  box.querySelectorAll('.dcell').forEach(cell => {
+    const it = list.find(x => x.id === cell.dataset.id);
+    if (it) thumbSrc(it).then(src => { if (src) cell.querySelector('img').src = src; });
+    cell.onclick = () => it && openViewer(it);
+  });
+}
+
+document.querySelectorAll('.chips').forEach(c => {
+  c.onclick = () => {
+    DAY_SRC = c.dataset.s;
+    document.querySelectorAll('.chips').forEach(x => x.classList.toggle('active', x === c));
+    renderDays();
+  };
+});
+$('#dq').oninput = e => { DAY_Q = e.target.value; renderDays(); };
+
+/* ================= 待审核 ================= */
+let RV = [];                 // 当前待审核条目
+const RV_SEL = new Set();
+
+/* 库存页刷新时顺手更新 tab 上的角标，不用等用户点进待审核页 */
+function updateReviewBadge() {
+  const n = (ITEMS || []).filter(x => x.review === 'pending').length;
+  const badge = $('#tabReviewN');
+  if (!badge) return;
+  badge.textContent = n;
+  badge.style.display = n ? '' : 'none';
+}
+
+function rvSync() {
+  const n = RV_SEL.size;
+  $('#rvCount').textContent = RV.length
+    ? `${RV.length} 张待审核${n ? ` · 已选 ${n}` : ''}`
+    : '没有待审核的';
+  $('#rvSelOk').disabled = !n;
+  $('#rvSelNo').disabled = !n;
+  $('#rvAll').disabled = !RV.length;
+  // tab 角标
+  const badge = $('#tabReviewN');
+  badge.textContent = RV.length;
+  badge.style.display = RV.length ? '' : 'none';
+}
+
+async function loadReview() {
+  try {
+    const d = await apiGet('api/review');
+    RV = d.items || [];
+    // 只保留还在列表里的选择
+    for (const id of [...RV_SEL]) if (!RV.some(x => x.id === id)) RV_SEL.delete(id);
+    const hint = $('#rvHint');
+    if (d.auto) {
+      hint.innerHTML = '当前「偷来的图直接进库」开着，新偷的不会进这里；这里只剩历史待审核的。关掉那个开关才会重新需要审核。';
+    } else if (!d.steal_on) {
+      hint.innerHTML = '偷表情包功能现在是关的，这些是以前收下的。';
+    } else {
+      hint.innerHTML = '';
+    }
+    renderReview();
+  } catch (e) {
+    $('#rvGrid').innerHTML = '<div class="empty">读取失败：' + esc(e.message || e) + '</div>';
+  }
+}
+
+function renderReview() {
+  const grid = $('#rvGrid');
+  if (!RV.length) {
+    grid.innerHTML = '<div class="empty">没有待审核的表情包。别人发 QQ 表情、AI 问过之后你说要，才会进这里。</div>';
+    rvSync();
+    return;
+  }
+  grid.innerHTML = RV.map(it => `
+    <div class="rvcard${RV_SEL.has(it.id) ? ' sel' : ''}" data-id="${esc(it.id)}">
+      <div class="rvimg" data-act="view">
+        <img alt="" loading="lazy">
+        <span class="rvpick${RV_SEL.has(it.id) ? ' on' : ''}" data-act="pick"></span>
+      </div>
+      <div class="rvmeta">
+        <div class="rvname">${esc(it.name || '未命名')}</div>
+        <div class="rvtip">${esc(it.created_at ? fmtDay(it.created_at) : '')}　·　${(it.size / 1024 || 0).toFixed(0)} KB</div>
+      </div>
+      <div class="rvact">
+        <button class="btn ok" data-act="ok">允许</button>
+        <button class="btn warn" data-act="no">拒绝</button>
+      </div>
+    </div>`).join('');
+  grid.querySelectorAll('.rvcard').forEach(card => {
+    const it = RV.find(x => x.id === card.dataset.id);
+    if (!it) return;
+    thumbSrc(it).then(src => { if (src) card.querySelector('img').src = src; });
+    card.querySelector('[data-act="view"]').onclick = e => {
+      if (e.target.dataset.act === 'pick') return;
+      openViewer(it);
+    };
+    card.querySelector('[data-act="pick"]').onclick = e => {
+      e.stopPropagation();
+      if (RV_SEL.has(it.id)) RV_SEL.delete(it.id); else RV_SEL.add(it.id);
+      renderReview();
+    };
+    card.querySelector('[data-act="ok"]').onclick = () => reviewApply([it.id], 'allow');
+    card.querySelector('[data-act="no"]').onclick = async () => {
+      const ok = await askConfirm('拒绝这张？', '拒绝会把图片和记录直接从库里删掉，不可恢复。', '拒绝并删除');
+      if (ok) reviewApply([it.id], 'reject');
+    };
+  });
+  rvSync();
+}
+
+async function reviewApply(ids, action, scope) {
+  const body = { action };
+  if (scope) body.scope = scope; else body.ids = ids;
+  try {
+    const d = await apiPost('api/review/apply', body);
+    const n = d.count || 0;
+    if (action === 'allow') {
+      toast(`已允许 ${d.allowed || n} 张${d.queued ? `，${d.queued} 张在排队打标` : ''}`);
+    } else if (action === 'reject') {
+      toast(`已删除 ${d.deleted || d.rejected || n} 张（拒绝的图不留在库里）`);
+    } else {
+      toast(`已删除 ${d.deleted || n} 张`);
+    }
+    RV_SEL.clear();
+    loadReview();
+    load(true);              // 通过的图要出现在库存/按天里
+    if (typeof renderDays === 'function') { /* 切到按天页时会自动重画 */ }
+  } catch (e) {
+    toast(e.message || '操作失败', true);
+  }
+}
+
+$('#rvAll').onclick = async () => {
+  if (!RV.length) return;
+  const ok = await askConfirm(`允许全部 ${RV.length} 张？`, '允许后它们会立刻参与检索，并开始排队打标。', '全部允许');
+  if (ok) reviewApply([], 'allow', 'all');
+};
+$('#rvSelOk').onclick = () => reviewApply([...RV_SEL], 'allow');
+$('#rvSelNo').onclick = async () => {
+  const n = RV_SEL.size;
+  if (!n) return;
+  const ok = await askConfirm(`拒绝选中的 ${n} 张？`, '拒绝会把图片和记录直接从库里删掉，不可恢复。', '拒绝并删除');
+  if (ok) reviewApply([...RV_SEL], 'reject');
+};
+
+/* ================= 打标队列 ================= */
+let qTimer = 0;
+let qPaused = false;
+let qOn = false;          // 队列页是否正被看着：切走就不再续期轮询
+
+function fmtDur(sec) {
+  sec = Math.max(0, Math.round(sec || 0));
+  if (sec < 60) return sec + ' 秒';
+  const m = Math.floor(sec / 60), s = sec % 60;
+  if (m < 60) return `${m} 分 ${s} 秒`;
+  return `${Math.floor(m / 60)} 时 ${m % 60} 分`;
+}
+
+async function loadQueue(quiet) {
+  clearTimeout(qTimer);
+  if (!qOn) return;
+  try {
+    const d = await apiGet('api/queue');
+    if (!qOn) return;            // 请求飞行途中切走了，别把结果画回去
+    paintQueue(d);
+    const st = d.stats || {};
+    const busy = (st.queued || 0) + (st.active || 0) + (st.cooldown || 0);
+    qTimer = setTimeout(() => loadQueue(true), busy ? 1500 : 6000);
+  } catch (e) {
+    if (!qOn) return;
+    if (!quiet) $('#qMeta').textContent = '读取失败：' + (e.message || e);
+    qTimer = setTimeout(() => loadQueue(true), 6000);
+  }
+}
+
+function paintQueue(d) {
+  const st = d.stats || {};
+  qPaused = !!st.paused;
+  $('#qActive').textContent = st.active || 0;
+  $('#qQueued').textContent = st.queued || 0;
+  $('#qDone').textContent = st.done || 0;
+  $('#qFailed').textContent = st.failed || 0;
+  $('#qRate').textContent = st.rate > 0 ? Number(st.rate).toFixed(2) + '/s' : '—';
+  $('#qEta').textContent = st.eta > 0 ? fmtDur(st.eta) : '—';
+
+  const total = (st.done || 0) + (st.left || 0);
+  const pct = total > 0 ? Math.round((st.done || 0) / total * 100) : 0;
+  const fill = $('#qFill');
+  fill.style.width = pct + '%';
+  fill.classList.toggle('hold', qPaused);
+  fill.classList.remove('over');
+
+  $('#qPausedBar').style.display = qPaused ? 'block' : 'none';
+  const pauseBtn = $('#qPause');
+  pauseBtn.textContent = qPaused ? '继续打标' : '暂停打标';
+  pauseBtn.className = 'btn ' + (qPaused ? 'ok' : 'warn');
+
+  let meta = d.llm_ready
+    ? `模型：${d.llm}　·　并发 ${st.workers || 0}　·　库存共 ${st.total || 0} 张`
+    : '⚠ 打标模型还没配好，队列不会动 —— 去「插件配置 → LLM 视觉打标」填 API，或直接选一个 AstrBot 提供商';
+  if (st.cooldown > 0) meta += `　·　上游冷却 ${Math.ceil(st.cooldown)}s`;
+  if (qPaused) meta += '　·　已暂停';
+  $('#qMeta').textContent = meta;
+
+  // 主模型 + 候选模型：标出谁在限流冷却，方便判断要不要换
+  const tg = d.targets || [];
+  const qm = $('#qModels');
+  if (tg.length > 1 || (tg.length === 1 && tg[0].down > 0)) {
+    qm.innerHTML = tg.map((t, i) => {
+      const cls = 'qm' + (i === 0 ? ' main' : '') + (t.down > 0 ? ' down' : '');
+      const tag = i === 0 ? '主' : '候选';
+      const extra = t.down > 0 ? ` · 冷却 ${t.down}s` : '';
+      return `<span class="${cls}" title="${esc(t.label)}">${tag} <i>${esc(t.model)}</i>${extra}</span>`;
+    }).join('');
+    qm.style.display = '';
+  } else {
+    qm.style.display = 'none';
+  }
+
+  $('#qActiveN').textContent = `（${st.active || 0}）`;
+  $('#qQueuedN').textContent = (d.queued_total || 0) > (d.queued || []).length
+    ? `（共 ${d.queued_total}，只显示前 ${(d.queued || []).length}）`
+    : `（${st.queued || 0}）`;
+  $('#qFailN').textContent = `（${d.failed_total || 0}）`;
+
+  $('#qActiveList').innerHTML = (d.active || []).length
+    ? d.active.map(x => `<div class="qrow"><span class="nm">${esc(x.name || x.id)}</span>
+        <span class="tm">已跑 ${(Number(x.elapsed) || 0).toFixed(1)}s</span></div>`).join('')
+    : '<span class="count">当前没有正在跑的</span>';
+
+  $('#qQueuedList').innerHTML = (d.queued || []).length
+    ? d.queued.map(x => `<div class="qrow"><span class="nm">${esc(x.name || x.id)}</span>
+        <span class="tm">等了 ${fmtDur(x.waited)}</span></div>`).join('')
+    : '<span class="count">队列是空的</span>';
+
+  const fails = d.failed || [];
+  $('#qFailBox').style.display = fails.length ? '' : 'none';
+  $('#qFailList').innerHTML = fails.map(x => `<div class="qrow">
+      <span class="nm">${esc(x.name || x.id)}</span>
+      <span class="er">${esc(x.err || '未知错误')}</span></div>`).join('');
+
+  $('#qStat').textContent = qPaused ? '已暂停' : '';
+}
+
+$('#qPause').onclick = async () => {
+  const btn = $('#qPause');
+  btn.disabled = true;
+  try {
+    const d = await apiPost('api/queue/pause', { paused: !qPaused });
+    qPaused = !!d.paused;
+    toast(qPaused ? '已暂停，正在跑的那几张跑完就停' : '已继续打标');
+  } catch (e) {
+    toast(e.message || '操作失败', true);
+  }
+  btn.disabled = false;
+  loadQueue();
+};
+
+$('#qClear').onclick = async () => {
+  const ok = await askConfirm('清空「待打标」队列？', '只撤掉还没开始跑的，状态退回「未打标」，图片和已有标注都不动。正在跑的几张会跑完。', '清空');
+  if (!ok) return;
+  try {
+    const d = await apiPost('api/queue/clear', {});
+    toast(d.dropped ? `已撤掉 ${d.dropped} 张，状态退回未打标` : '队列本来就是空的');
+  } catch (e) {
+    toast(e.message || '操作失败', true);
+  }
+  loadQueue();
+};
+
+async function qRetry(scope, emptyWord) {
+  try {
+    const d = await apiPost('api/queue/retry', { scope });
+    if (!d.total) toast(`没有${emptyWord}的图`);
+    else if (d.queued < d.total) toast(`已排队 ${d.queued} 张（${d.total - d.queued} 张本来就在队列里）`);
+    else toast(`已把 ${d.queued} 张排进队列`);
+  } catch (e) {
+    toast(e.message || '操作失败', true);
+  }
+  loadQueue();
+}
+$('#qRetryFail').onclick = () => qRetry('failed', '失败');
+$('#qRetryNone').onclick = () => qRetry('none', '未打标');
 
 /* ================= 插件配置 ================= */
 let cfgItems = [];
@@ -537,12 +1486,42 @@ async function loadCfg() {
   }
 }
 
+/* 改完「模型来源 / AstrBot 提供商」后，把提示行里的「当前实际使用」刷新一下。
+   只改文字，不重渲染控件，免得把焦点和未提交的输入冲掉。 */
+async function refreshCfgHints(keys) {
+  try {
+    const d = await apiGet('api/config');
+    (d.items || []).forEach(it => {
+      if (!keys.includes(it.key)) return;
+      const el = $(`#cfgList [data-k="${it.key}"]`);
+      const row = el && el.closest('.cfgrow');
+      const hint = row && row.querySelector('.cfghint');
+      if (hint) hint.textContent = it.hint || '';
+    });
+  } catch (e) { /* 刷新提示失败无所谓，别弹错误 */ }
+}
+
 function cfgRow(it) {
   const warn = String(it.hint || '').startsWith('【');
   const name = `<div class="cfgname"><b>${esc(it.label)}</b>
     <div class="cfghint${warn ? ' warn' : ''}">${esc(it.hint || '')}</div></div>`;
   const isSecret = !!it.secret;
   const hasVal = !(it.value === '' || it.value == null);
+  if (it.multi) {
+    // 多选：一个大 key 下挂若干 checkbox，读值时由 cfgReadEl 汇总成逗号串
+    const cur = new Set(String(it.value == null ? '' : it.value).split(/[,，;；\s]+/).filter(Boolean));
+    const boxes = (it.options || []).map(o => {
+      const v = (o && typeof o === 'object') ? o.value : o;
+      const l = (o && typeof o === 'object') ? (o.label == null ? o.value : o.label) : o;
+      const on = cur.has(String(v));
+      return `<label class="mpick${on ? ' on' : ''}">
+        <input type="checkbox" data-k="${esc(it.key)}" data-t="str" data-multi="1" data-v="${esc(v)}"${on ? ' checked' : ''}>
+        <span class="mpl" title="${esc(l)}">${esc(l)}</span></label>`;
+    }).join('');
+    return `<div class="cfgrow">${name}
+      <div class="cfgctl cfgmulti">${boxes || '<span class="mpskip">没有可选的提供商</span>'}</div>
+      <span class="cfgstat"></span></div>`;
+  }
   if (it.type === 'bool') {
     return `<div class="cfgrow">${name}
       <div class="cfgctl"><label class="sw"><input type="checkbox" data-k="${esc(it.key)}" data-t="bool"${it.value ? ' checked' : ''}><i></i></label></div>
@@ -558,8 +1537,15 @@ function cfgRow(it) {
       <div class="cfgctl"><input class="cfgnum" type="number" step="0.1" min="0" data-k="${esc(it.key)}" data-t="float" value="${Number(it.value) || 0}"></div>
       <span class="cfgstat"></span></div>`;
   }
-  if ((it.options || []).length) {
-    const opts = it.options.map(o => `<option value="${esc(o)}"${o === it.value ? ' selected' : ''}>${esc(o)}</option>`).join('');
+  // options 既支持 ["a","b"] 也支持 [{value,label}]（llm_provider_id 是动态生成的）
+  const optList = (it.options || []).map(o =>
+    (o && typeof o === 'object') ? { v: o.value, l: (o.label == null ? o.value : o.label) } : { v: o, l: o });
+  if (optList.length) {
+    const cur = it.value == null ? '' : String(it.value);
+    if (!optList.some(o => String(o.v) === cur) && cur) {
+      optList.unshift({ v: it.value, l: `${it.value}（已失效）` });
+    }
+    const opts = optList.map(o => `<option value="${esc(o.v)}"${String(o.v) === cur ? ' selected' : ''}>${esc(o.l)}</option>`).join('');
     return `<div class="cfgrow">${name}
       <div class="cfgctl"><select class="cfgsel" data-k="${esc(it.key)}" data-t="str">${opts}</select></div>
       <span class="cfgstat"></span></div>`;
@@ -584,10 +1570,24 @@ function renderCfg() {
   $('#cfgList').querySelectorAll('[data-k]').forEach(el => {
     el.addEventListener(el.type === 'text' || el.type === 'password' || el.type === 'number' ? 'input' : 'change', queueSave);
   });
+  // 多选项的选中态画在 label 上（input 本身被隐藏了），不重画整行，免得闪
+  $('#cfgList').querySelectorAll('input[data-multi="1"]').forEach(el => {
+    el.addEventListener('change', () => {
+      const lab = el.closest('.mpick');
+      if (lab) lab.classList.toggle('on', el.checked);
+    });
+  });
 }
 
 function cfgReadEl(el) {
   const t = el.dataset.t;
+  if (el.dataset.multi === '1') {
+    /* 一组 checkbox 共用一个 key，读的时候要把整组里勾上的都收上来 */
+    const box = el.closest('.cfgctl');
+    if (!box) return '';
+    return Array.from(box.querySelectorAll('input[data-multi="1"]:checked'))
+      .map(x => x.dataset.v).filter(Boolean).join(',');
+  }
   if (t === 'bool') return !!el.checked;
   if (t === 'int') return Number(el.value) || 0;
   if (t === 'float') return Number(el.value) || 0;
@@ -675,6 +1675,9 @@ async function doFlushCfg() {
     });
     setTimeout(() => { keys.forEach(k => cfgMark(k, '')); }, 1400);
     cfgTouched = true;
+    if (keys.includes('llm_source') || keys.includes('llm_provider_id') || keys.includes('llm_provider_pool')) {
+      refreshCfgHints(['llm_source', 'llm_provider_id', 'llm_provider_pool']);
+    }
   } catch (e) {
     keys.forEach(k => { cfgFails[k] = true; cfgMark(k, 'fail'); });
     toast(e.message || '保存失败', true);
