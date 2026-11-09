@@ -1678,7 +1678,7 @@ class StickerKit(Star):
             review_txt = f"，待审核 {pending_review} 张" if pending_review else ""
             steal_txt = "，偷表情包已开" if self._steal_on() else ""
             yield event.plain_result(
-                f"StickerKit v1.11.1：库存 {total} 张{review_txt}"
+                f"StickerKit v1.11.2：库存 {total} 张{review_txt}"
                 f"（本次启动迁移自陪伴插件 {self._migrated} 张），打标中 {analyzing}{steal_txt}\n"
                 f"打标模型：{self._llm_source_desc()}\n"
                 f"配图频率：档位={label} · 概率={float(self.config.get('send_probability', 1.0)):.0%}"
@@ -2313,51 +2313,30 @@ class StickerKit(Star):
         return self._steal_on() and bool(self.config.get("steal_proactive", False))
 
     def _steal_hint(self, event) -> str:
-        """给 AI 的提示。没开功能 / 没权限时返回空串（但候选照记）。
+        """给 AI 的提示，**字节恒定**——这是前缀缓存的硬要求。
 
-        分三种：
-        - 这条带 QQ 表情（mface）→ 问一句要不要收；开了主动偷就直接收
-        - 这条带普通图片 → 只记候选，不主动问（别对别人的自拍嘘寒问暖），
-          用户明说要偷时工具自然能拿到
-        - 只是手上有存货 → 一条短提醒；开了主动偷则允许 AI 自己挑一张收
+        2026-11-10 改：原来按「这条带 mface / 带普通图 / 手上有存货 / 配额满」
+        返回 5 种不同文案，带图那轮比不带图多一百来字。这段拼在 system 尾部，
+        多一少一，provider 从那里起把后面十几 k 历史全部重算——实盘
+        in=14k / cached=7.4k 的三笔就是这么来的（sys-diff 报 L75 在
+        「[表情包能力]」和「【偷表情包】…已经记成可偷候选」之间来回切）。
+
+        现在只保留「功能开没开 / 有没有权限」这两个低频、稳定的判定，措辞固定；
+        「这次到底能不能收」交给 sticker_steal 工具返回，模型看着消息自己决定
+        要不要问。_remember_media 的副作用照旧执行，候选一条不少。
         """
         if not self._steal_on():
             return ""
         umo = getattr(event, "unified_msg_origin", "") or ""
-        fresh = self._remember_media(event, umo)
+        # 副作用保留：群友发的也照记候选（权限只决定给不给提示）
+        self._remember_media(event, umo)
         if self.config.get("steal_admin_only", False) and not event.is_admin():
-            return ""  # 群友发的照样记下来，但不给提示（他们也不能偷）
-        if self._steal_quota(event):
-            return ""  # 冷却中 / 今日额度满：别让 AI 白问一句再被工具打回，白烧一轮 token
-        proactive = self._steal_proactive()
-        mf = [c for c in fresh if c.get("kind") == "mface"]
-        if mf:
-            if proactive:
-                return (
-                    "【偷表情包】对方这条消息里带 QQ 表情。你觉得有意思可以直接调用 sticker_steal"
-                    " 收进表情包库（不用先问）；也可以先问一句对方愿不愿意。"
-                    "别每条消息都偷，隔一阵收一张就好；对方明显不情愿就别收。"
-                )
-            return (
-                "【偷表情包】对方这条消息里带 QQ 表情。可以顺手在回复末尾问一句要不要收进表情包库"
-                "（用户表示想收/想偷时，调用 sticker_steal 工具收录；用户没兴趣就别问，也别调用工具）。"
-            )
-        if fresh:
-            return (
-                "【偷表情包】对方这条消息里带图片，已经记成可偷候选。"
-                "用户明确说要偷/要收的时候调用 sticker_steal 收录；用户没提就别主动问，"
-                "更不要自己决定替他收下来。"
-            )
-        if self._steal_candidates(umo):
-            if proactive:
-                return (
-                    "【偷表情包】手上还有之前收到的表情包，你闲着没事、觉得哪张有意思的话，"
-                    "可以自己调用 sticker_steal 收一张进库，不用等用户开口。"
-                    "但别每条消息都偷，偶尔来一张；用户正在说正事就别偷。"
-                )
-            # 上一轮问过、用户这轮才说「要」——只提醒工具还能用，不再让 AI 主动发问
-            return "【偷表情包】手上还有刚收到的表情包，用户说要/想收的话调用 sticker_steal 收录。"
-        return ""
+            return ""
+        return (
+            "【偷表情包】对方发来表情或图片时，你可以用 sticker_steal 把有意思的收进表情包库。"
+            "用户明确说要偷/要收就直接调用；没提就别主动问，也不要自己替他收下来。"
+            "工具会告诉你这次能不能收（冷却、额度、重复），不能收就作罢，别反复试。"
+        )
 
     @staticmethod
     def _img_complete(raw: bytes, mime: str, cl: int = 0) -> bool:
@@ -3157,7 +3136,7 @@ class StickerKit(Star):
                 "data_dir": str(self._data_dir),
                 "queue": self._queue_stats(),
                 "llm": self._llm_source_desc() if llm_ready else "",
-                "version": "1.11.1",
+                "version": "1.11.2",
             },
         }
 
