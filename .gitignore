@@ -7,6 +7,7 @@ logs/
 *.db
 *.sqlite3
 .env
+*.bak-*
 .venv/
 venv/
 .DS_Store

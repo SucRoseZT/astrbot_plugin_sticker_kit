@@ -201,6 +201,70 @@
   .qrow .tm { margin-left:auto; color:var(--dim); font-size:11px; white-space:nowrap; }
   .qrow .er { color:var(--bad); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .qpaused { background:#fff0ee; border:1px solid #f3c6c0; color:var(--bad); border-radius:8px; padding:8px 12px; font-size:12px; margin-bottom:10px; }
+  .guide-steps { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:14px; }
+  .guide-step { border:1px solid var(--line); background:#fff; color:var(--dim); border-radius:999px; padding:5px 12px; font-size:12px; }
+  .guide-step.act { border-color:var(--acc); background:#fff2f7; color:#c73f70; font-weight:600; }
+  .guide-step.done { border-color:#cfe8d6; color:var(--ok); }
+  .guide-card { border:1px solid var(--line); border-radius:10px; padding:14px; background:#fff; }
+  .guide-title { font-size:16px; font-weight:600; margin-bottom:6px; }
+  .guide-desc { font-size:12px; color:var(--dim); line-height:1.7; margin-bottom:12px; }
+  .guide-check { display:inline-flex; align-items:center; gap:7px; font-size:13px; margin:3px 14px 3px 0; }
+  .guide-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:10px; }
+  .guide-actions { margin-top:14px; }
+  .guide-summary { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:8px; }
+  .guide-summary div { border:1px solid #f6e2eb; border-radius:8px; padding:9px 11px; font-size:12px; background:#fffafd; }
+  .guide-summary b { display:block; font-size:13px; margin-bottom:3px; }
+  .modeltest { white-space:pre-line; line-height:1.7; margin-top:10px; }
+  .guide-warn { color:var(--bad); }
+  /* 配置引导：居中的正方形图层，背后的页面模糊 + 压暗 */
+  .guide-mask {
+    position:fixed; inset:0; z-index:200; display:none;
+    align-items:center; justify-content:center; padding:20px;
+    background:rgba(58,28,42,.46);
+    backdrop-filter:blur(7px) saturate(.85);
+    -webkit-backdrop-filter:blur(7px) saturate(.85);
+  }
+  .guide-mask.on { display:flex; }
+  .guide-square {
+    --gside:min(560px, calc(100vw - 40px), calc(100vh - 40px));
+    width:var(--gside); height:var(--gside); aspect-ratio:1 / 1;
+    background:var(--panel); border:1px solid var(--line); border-radius:16px;
+    box-shadow:0 18px 60px rgba(90,40,65,.34);
+    display:flex; flex-direction:column; overflow:hidden;
+  }
+  .guide-head { display:flex; align-items:center; justify-content:space-between; gap:10px;
+    padding:13px 18px; border-bottom:1px solid var(--line); background:#fffafc; }
+  .guide-head b { color:#e2568a; font-size:15px; }
+  .guide-close { border:0; background:transparent; font-size:24px; line-height:1;
+    cursor:pointer; color:var(--dim); padding:0 4px; }
+  .guide-close:hover { color:var(--bad); }
+  .guide-inner { flex:1; min-height:0; overflow-y:auto; overflow-x:hidden; padding:14px 18px; }
+  /* 正方形卡片比主页面窄：配置行必须能换行，名称不许被压成竖排文字。
+     cfgctl 里放多个快捷按钮时尤其容易撑破格子（曾出现「常用取值」逐字竖排 + 横向滚动条）。 */
+  .guide-inner .cfgrow { flex-wrap:wrap; }
+  .guide-inner .cfgname { flex:1 1 150px; min-width:130px; }
+  .guide-inner .cfgctl { flex:1 1 200px; min-width:0; max-width:100%; flex-wrap:wrap; }
+  .guide-inner .cfgctl > .btn { flex:0 0 auto; white-space:nowrap; }
+  .guide-inner .cfgctl > input.cfgtext,
+  .guide-inner .cfgctl > select.cfgsel { flex:1 1 200px; width:auto; max-width:100%; min-width:0; }
+  .guide-inner .cfgctl > input.cfgnum { flex:0 0 auto; }
+  .guide-inner .guide-grid { grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); }
+  .guide-stack { display:flex; flex-direction:column; }
+  /* 每日上限这步整行单列：标签固定宽度，四个快捷按钮才能一排放下 */
+  .guide-stack .cfgname { flex:0 0 150px; min-width:150px; }
+  .guide-stack .cfgctl { flex:1 1 auto; }
+  .guide-stack .chipf { padding:4px 10px; }
+  .guide-foot { border-top:1px solid var(--line); padding:11px 18px; background:#fffafc; }
+  .guide-foot .bar { margin-bottom:8px; }
+  .guide-locktip { display:none; margin:8px 0 12px; padding:9px 12px; border-radius:8px;
+    background:#fff2f7; border:1px solid #f6c9dc; color:#c73f70; font-size:12.5px; font-weight:600; line-height:1.6; }
+  .guide-locktip.on { display:block; }
+  .cfgrow.locked { opacity:.55; }
+  .cfgrow.locked .cfgctl { filter:grayscale(1); }
+  .cfgctl input:disabled, .cfgctl select:disabled {
+    background:#f4eef1; color:#9c8691; cursor:not-allowed; border-color:#e7d5dd; }
+  .cfghint.lockmsg { color:#c73f70; font-weight:600; }
+  #guideResult { max-height:100px; overflow:auto; white-space:pre-line; }
 </style>
 </head>
 <body>
@@ -212,6 +276,7 @@
   <div class="tab" data-tab="queue">打标队列</div>
   <div class="tab" data-tab="brief">注入分类</div>
   <div class="tab" data-tab="cfg">插件配置</div>
+  <button class="btn" id="tabGuideOpen" style="margin-left:auto;align-self:flex-start" title="打开配置引导">配置引导</button>
 </div>
 <div id="viewStock">
   <div id="pathline"></div>
@@ -280,8 +345,12 @@
       <button class="btn" id="qClear" title="把还没开始跑的从队列里撤掉，状态退回「未打标」，不会删图">清空待打标</button>
       <button class="btn ok" id="qRetryFail">重试全部失败</button>
       <button class="btn" id="qRetryNone" title="把还没打过标的图全部排进队列">打标未打标的</button>
+      <button class="btn" id="qTestModel" title="用真实图片和打标提示词测试主模型及候选模型">测试打标模型</button>
+      <button class="btn" id="qSceneBackfill" title="给旧库补上用途词（收到/拥抱/比爱心），只写 scene 字段，不改情绪和手改过的标注">回填用途词</button>
       <span class="count" id="qStat" style="margin-left:auto"></span>
     </div>
+    <div class="cfghint modeltest" id="qTestResult"></div>
+    <div class="cfghint modeltest" id="qSceneResult"></div>
   </div>
   <div class="cfgsec">
     <div class="cfgsec-t">进行中 <span class="count" id="qActiveN"></span></div>
@@ -337,12 +406,37 @@
   </div>
 </div>
 <div id="viewCfg" style="display:none">
+  <div class="bar"><button class="btn ok" id="cfgOpenGuide">重新打开配置引导</button>
+    <span class="count">第一次打开面板会自动弹出引导；这里随时可以再开一次。</span></div>
   <div class="sub">改动后自动保存并立即生效，无需重启</div>
   <div id="cfgpath"></div>
   <div id="cfgList"><div class="empty">加载中…</div></div>
   <div class="cfgfoot">
     <span id="cfgStat"></span>
     <button class="btn warn" id="cfgRetry" style="display:none">重试未保存项</button>
+  </div>
+</div>
+<div id="guideMask" class="guide-mask">
+  <div class="guide-square" id="guideCard" role="dialog" aria-modal="true" aria-label="配置引导">
+    <div class="guide-head">
+      <b>配置引导 · 蔗糖的表情包小屋~</b>
+      <button class="guide-close" id="guideClose" title="关闭引导">×</button>
+    </div>
+    <div class="guide-inner">
+      <div class="sub">按步骤设置主要/备用打标模型、偷表情、每日上限和配图频率；最后会用真实图片发一次打标请求验证模型。<br>引导里显示的都是你当前的设置，<b>不点保存就不会改动任何配置</b>；点「稍后再说」直接保留现状并关闭，之后不再自动弹出。</div>
+      <div class="guide-steps" id="guideSteps"></div>
+      <div class="guide-card" id="guideBody"><div class="empty">加载中…</div></div>
+    </div>
+    <div class="guide-foot">
+      <div class="bar guide-actions">
+        <button class="btn" id="guidePrev">上一步</button>
+        <button class="btn ok" id="guideNext">下一步</button>
+        <button class="btn" id="guideTest">保存并测试模型</button>
+        <button class="btn ok" id="guideSaveOnly" title="只写入改动过的项，不跑模型测试；没改动就不会动你现有配置">仅保存配置</button>
+        <button class="btn" id="guideSkip" title="保留当前配置并关闭，之后不再自动弹出">稍后再说</button>
+      </div>
+      <div class="cfghint modeltest" id="guideResult"></div>
+    </div>
   </div>
 </div>
 <div id="toast"></div>
@@ -428,17 +522,20 @@ function askConfirm(title, detail, okText) {
 let cfgLoaded = false;
 let briefLoaded = false;
 let queueLoaded = false;
+let guideLoaded = false;
 function switchTab(name) {
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('act', t.dataset.tab === name));
   $('#viewStock').style.display = name === 'stock' ? '' : 'none';
   $('#viewQueue').style.display = name === 'queue' ? '' : 'none';
   $('#viewBrief').style.display = name === 'brief' ? '' : 'none';
   $('#viewCfg').style.display = name === 'cfg' ? '' : 'none';
+  /* 配置引导已改成模态卡片，不参与标签页切换 */
   $('#viewReview').style.display = name === 'review' ? '' : 'none';
   if (name === 'queue') { qOn = true; queueLoaded = true; loadQueue(); }
   else { qOn = false; clearTimeout(qTimer); }   // 离开队列页就停轮询，别在后台一直拉
   if (name === 'brief' && !briefLoaded) { briefLoaded = true; loadBrief(); }
   if (name === 'cfg' && !cfgLoaded) { cfgLoaded = true; loadCfg(); }
+  /* 配置引导由 openGuide() 打开 */
   if (name === 'review') loadReview();
 }
 document.querySelectorAll('.tab').forEach(t => t.onclick = () => switchTab(t.dataset.tab));
@@ -559,7 +656,7 @@ function render() {
   const stOf = it => it.analysis_status || 'none';
   const list = ITEMS.filter(it =>
     (FILTER === 'all' || stOf(it) === FILTER) &&
-    (!q || [it.name, (it.tags||[]).join(' '), it.description, (it.emotions||[]).join(' '), it.visible_text||''].join(' ').toLowerCase().includes(q))
+    (!q || [it.name, (it.tags||[]).join(' '), (it.scene||[]).join(' '), it.description, (it.emotions||[]).join(' '), it.visible_text||''].join(' ').toLowerCase().includes(q))
   );
   /* 选择集按 id 存，重画/切筛选都不丢；库里已经不存在的顺手剔掉 */
   if (SEL.size) {
@@ -647,6 +744,7 @@ function render() {
           <span class="srctag ${srcClass(it)}">${esc(srcText(it))}</span>
           <span>主情绪 <b>${esc(primary || '未标')}</b></span>
           ${second ? `<span>· 次 ${esc(second)}</span>` : ''}
+          ${(it.scene||[]).length ? `<span>· 用途 <b>${esc((it.scene||[]).join('、'))}</b></span>` : ''}
           ${conf != null ? `<span>· 置信 ${conf.toFixed(2)}</span>` : ''}
           ${it.usage_count ? `<span>· 用过 ${it.usage_count} 次</span>` : ''}
           ${human.length ? `<span class="hchip" title="已手改：${esc(human.join('/'))}，重打标不会覆盖">手改</span>` : ''}
@@ -654,6 +752,7 @@ function render() {
         <input class="f name" value="${esc(it.name||'')}" placeholder="名称">
         <input class="f emo" value="${esc(emos.join('、'))}" placeholder="情绪（顿号分隔，第一个=主情绪）">
         <input class="f tags" value="${esc((it.tags||[]).join('、'))}" placeholder="画面关键词（顿号分隔）">
+        <input class="f scene" value="${esc((it.scene||[]).join('、'))}" placeholder="用途词（收到/比爱心/拥抱，顿号分隔）">
         <textarea class="f desc" placeholder="描述">${esc(it.description||'')}</textarea>
         <textarea class="f vtext" placeholder="图上文字">${esc(it.visible_text||'')}</textarea>
         ${it.analysis_error ? `<div class="err">${esc(it.analysis_error)}</div>` : ''}
@@ -809,6 +908,7 @@ async function save(it, card) {
     name: val(card.querySelector('.name')),
     emotions: val(card.querySelector('.emo')).split(/[、,，\s]+/).filter(Boolean),
     tags: val(card.querySelector('.tags')).split(/[、,，\s]+/).filter(Boolean),
+    scene: val(card.querySelector('.scene')).split(/[、,，\s]+/).filter(Boolean),
     description: val(card.querySelector('.desc')),
     visible_text: val(card.querySelector('.vtext')),
   };
@@ -1461,6 +1561,30 @@ async function loadCfg() {
 
 /* 改完「模型来源 / AstrBot 提供商」后，把提示行里的「当前实际使用」刷新一下。
    只改文字，不重渲染控件，免得把焦点和未提交的输入冲掉。 */
+/* 主模型来源变了以后，只更新三项的灰色禁用态，不重画整页（免得打断输入）。 */
+async function syncCfgLocks() {
+  try {
+    const d = await apiGet('api/config');
+    (d.items || []).forEach(it => {
+      if (!['llm_api_base', 'llm_api_key', 'llm_model'].includes(it.key)) return;
+      const el = $(`#cfgList [data-k="${it.key}"]`);
+      if (!el) return;
+      const locked = !!it.locked;
+      el.disabled = locked;
+      const row = el.closest('.cfgrow');
+      if (row) row.classList.toggle('locked', locked);
+      let tip = row && row.querySelector('.lockmsg');
+      if (locked && !tip) {
+        tip = document.createElement('div');
+        tip.className = 'cfghint lockmsg';
+        tip.textContent = '您已设置打标模型！本项已停用';
+        const nm = row && row.querySelector('.cfgname');
+        if (nm) nm.insertBefore(tip, nm.children[1] || null);
+      } else if (!locked && tip) tip.remove();
+    });
+  } catch (e) { /* 刷新失败无所谓 */ }
+}
+
 async function refreshCfgHints(keys) {
   try {
     const d = await apiGet('api/config');
@@ -1476,7 +1600,11 @@ async function refreshCfgHints(keys) {
 
 function cfgRow(it) {
   const warn = String(it.hint || '').startsWith('【');
+  const lock = !!it.locked;
+  const rowCls = lock ? 'cfgrow locked' : 'cfgrow';
+  const dis = lock ? ' disabled' : '';
   const name = `<div class="cfgname"><b>${esc(it.label)}</b>
+    ${lock ? '<div class="cfghint lockmsg">您已设置打标模型！本项已停用</div>' : ''}
     <div class="cfghint${warn ? ' warn' : ''}">${esc(it.hint || '')}</div></div>`;
   const isSecret = !!it.secret;
   const hasVal = !(it.value === '' || it.value == null);
@@ -1488,26 +1616,26 @@ function cfgRow(it) {
       const l = (o && typeof o === 'object') ? (o.label == null ? o.value : o.label) : o;
       const on = cur.has(String(v));
       return `<label class="mpick${on ? ' on' : ''}">
-        <input type="checkbox" data-k="${esc(it.key)}" data-t="str" data-multi="1" data-v="${esc(v)}"${on ? ' checked' : ''}>
+        <input type="checkbox" data-k="${esc(it.key)}" data-t="str" data-multi="1" data-v="${esc(v)}"${on ? ' checked' : ''}${dis}>
         <span class="mpl" title="${esc(l)}">${esc(l)}</span></label>`;
     }).join('');
-    return `<div class="cfgrow">${name}
+    return `<div class="${rowCls}">${name}
       <div class="cfgctl cfgmulti">${boxes || '<span class="mpskip">没有可选的提供商</span>'}</div>
       <span class="cfgstat"></span></div>`;
   }
   if (it.type === 'bool') {
-    return `<div class="cfgrow">${name}
-      <div class="cfgctl"><label class="sw"><input type="checkbox" data-k="${esc(it.key)}" data-t="bool"${it.value ? ' checked' : ''}><i></i></label></div>
+    return `<div class="${rowCls}">${name}
+      <div class="cfgctl"><label class="sw"><input type="checkbox" data-k="${esc(it.key)}" data-t="bool"${it.value ? ' checked' : ''}${dis}><i></i></label></div>
       <span class="cfgstat"></span></div>`;
   }
   if (it.type === 'int') {
-    return `<div class="cfgrow">${name}
-      <div class="cfgctl"><input class="cfgnum" type="number" step="1" data-k="${esc(it.key)}" data-t="int" value="${Number(it.value) || 0}"></div>
+    return `<div class="${rowCls}">${name}
+      <div class="cfgctl"><input class="cfgnum" type="number" step="1" data-k="${esc(it.key)}" data-t="int" value="${Number(it.value) || 0}"${dis}></div>
       <span class="cfgstat"></span></div>`;
   }
   if (it.type === 'float') {
-    return `<div class="cfgrow">${name}
-      <div class="cfgctl"><input class="cfgnum" type="number" step="0.1" min="0" data-k="${esc(it.key)}" data-t="float" value="${Number(it.value) || 0}"></div>
+    return `<div class="${rowCls}">${name}
+      <div class="cfgctl"><input class="cfgnum" type="number" step="0.1" min="0" data-k="${esc(it.key)}" data-t="float" value="${Number(it.value) || 0}"${dis}></div>
       <span class="cfgstat"></span></div>`;
   }
   // options 既支持 ["a","b"] 也支持 [{value,label}]（llm_provider_id 是动态生成的）
@@ -1519,15 +1647,15 @@ function cfgRow(it) {
       optList.unshift({ v: it.value, l: `${it.value}（已失效）` });
     }
     const opts = optList.map(o => `<option value="${esc(o.v)}"${String(o.v) === cur ? ' selected' : ''}>${esc(o.l)}</option>`).join('');
-    return `<div class="cfgrow">${name}
-      <div class="cfgctl"><select class="cfgsel" data-k="${esc(it.key)}" data-t="str">${opts}</select></div>
+    return `<div class="${rowCls}">${name}
+      <div class="cfgctl"><select class="cfgsel" data-k="${esc(it.key)}" data-t="str"${dis}>${opts}</select></div>
       <span class="cfgstat"></span></div>`;
   }
   const type = isSecret ? 'password' : 'text';
   const ph = isSecret && hasVal ? '已设置（留空保持不变）' : '';
-  return `<div class="cfgrow">${name}
+  return `<div class="${rowCls}">${name}
     <div class="cfgctl"><input class="cfgtext" type="${type}" data-k="${esc(it.key)}" data-t="str" data-secret="${isSecret ? 1 : 0}"
-      value="${isSecret ? '' : esc(it.value ?? '')}" placeholder="${esc(ph)}" autocomplete="off"></div>
+      value="${isSecret ? '' : esc(it.value ?? '')}" placeholder="${esc(ph)}" autocomplete="off"${dis}></div>
     <span class="cfgstat"></span></div>`;
 }
 
@@ -1650,6 +1778,7 @@ async function doFlushCfg() {
     cfgTouched = true;
     if (keys.includes('llm_source') || keys.includes('llm_provider_id') || keys.includes('llm_provider_pool')) {
       refreshCfgHints(['llm_source', 'llm_provider_id', 'llm_provider_pool']);
+      syncCfgLocks();
     }
   } catch (e) {
     keys.forEach(k => { cfgFails[k] = true; cfgMark(k, 'fail'); });
@@ -1660,8 +1789,540 @@ async function doFlushCfg() {
 
 $('#cfgRetry').onclick = () => flushCfg();
 
-/* 深链支持：?tab=cfg 直达配置标签（本页内切换，无导航） */
-if (new URLSearchParams(location.search).get('tab') === 'cfg') switchTab('cfg');
+/* ================= 打标模型测试 ================= */
+function renderModelTest(d, outSel) {
+  const out = $(outSel);
+  if (!out) return;
+  const rows = (d.results || []).map(r => {
+    const head = r.ok ? '✓' : '✗';
+    const detail = r.ok ? `可用（${r.elapsed}s）` : `不可用：${r.error || '未知错误'}`;
+    const warn = r.warning ? `　·　${r.warning}` : '';
+    return `${head} ${r.label || r.model}：${detail}${warn}`;
+  }).join('\n');
+  out.textContent = `${d.message || ''}${rows ? '\n' + rows : ''}`;
+  out.style.color = d.all_ok ? 'var(--ok)' : (d.ok ? '#a66a00' : 'var(--bad)');
+}
+
+async function runModelTest(scope, outSel) {
+  const out = $(outSel);
+  if (out) {
+    out.textContent = '正在用真实图片调用打标模型，请稍候…';
+    out.style.color = 'var(--dim)';
+  }
+  try {
+    const d = await apiPost('api/model/test', { scope: scope || 'all' });
+    renderModelTest(d, outSel);
+    toast(d.ok ? '模型测试通过' : '模型测试失败', !d.ok);
+    return d;
+  } catch (e) {
+    if (out) {
+      out.textContent = `✗ 测试请求失败：${e.message || e}`;
+      out.style.color = 'var(--bad)';
+    }
+    toast(e.message || '模型测试失败', true);
+    return { ok: false, all_ok: false, results: [] };
+  }
+}
+
+/* ================= 配置引导 ================= */
+const GUIDE_STEPS = [
+  '请设置你的主要打标模型',
+  '请设置你的备用打标模型',
+  '你要开启偷表情功能吗？',
+  '请设置每天的偷表情上限',
+  '请设置你的模型发表情包频率',
+  '测试一下，没问题就完成',
+];
+const GUIDE_STEP_KEYS = ['main', 'backup', 'steal', 'daily', 'freq', 'test'];
+let guideItems = [];
+let guideVals = {};
+let guideProviders = [];
+let guideTargets = [];
+let guideSourceDesc = '';
+let guideMainFromAstrbot = false;
+let guideForm = {};
+let guideStep = 0;
+
+function guideVal(k, fallback) {
+  const v = guideVals[k];
+  return v == null ? (fallback ?? '') : v;
+}
+function guideBool(k, fallback) {
+  const v = guideVals[k];
+  return v == null ? !!fallback : !!v;
+}
+function guidePool() {
+  return new Set(String(guideVal('llm_provider_pool', '')).split(/[,，;；\s]+/).filter(Boolean));
+}
+function guideInitForm() {
+  let source = String(guideVal('llm_source', '跟随 AstrBot'));
+  if (!['自动', '跟随 AstrBot', '手动填写'].includes(source)) source = '跟随 AstrBot';
+  guideForm = {
+    llm_source: source,
+    llm_provider_id: String(guideVal('llm_provider_id', '')),
+    llm_api_base: String(guideVal('llm_api_base', '')),
+    llm_api_key: '',
+    llm_model: String(guideVal('llm_model', '')),
+    llm_provider_pool: guidePool(),
+    steal_enabled: guideBool('steal_enabled', false),
+    steal_admin_only: guideBool('steal_admin_only', false),
+    steal_auto_approve: guideBool('steal_auto_approve', false),
+    steal_daily_limit: Number(guideVal('steal_daily_limit', 20)) || 0,
+    protocol_mode: guideBool('protocol_mode', true),
+    sticker_frequency: String(guideVal('sticker_frequency', '适中')),
+  };
+}
+
+async function loadGuide() {
+  try {
+    const [cfg, model] = await Promise.all([
+      apiGet('api/config'),
+      apiGet('api/model/targets'),
+    ]);
+    guideItems = cfg.items || [];
+    guideVals = Object.fromEntries(guideItems.map(it => [it.key, it.value]));
+    guideProviders = model.providers || [];
+    guideTargets = model.targets || [];
+    guideSourceDesc = model.source || '';
+    guideMainFromAstrbot = !!model.main_from_astrbot;
+    guideInitForm();
+    guideStep = 0;
+    renderGuide();
+  } catch (e) {
+    guideLoaded = false;
+    $('#guideBody').innerHTML = `<div class="empty">${esc(e.message || '引导加载失败')}</div>`;
+  }
+}
+
+function guideUpdateButtons() {
+  const prev = $('#guidePrev'), next = $('#guideNext');
+  if (prev) prev.disabled = guideStep === 0;
+  if (next) next.textContent = guideStep === GUIDE_STEPS.length - 1 ? '保存并测试' : '下一步';
+}
+
+function renderGuide() {
+  $('#guideSteps').innerHTML = GUIDE_STEPS.map((s, i) =>
+    `<span class="guide-step${i === guideStep ? ' act' : ''}${i < guideStep ? ' done' : ''}" data-i="${i}">${i + 1}. ${esc(s)}</span>`
+  ).join('');
+  $('#guideSteps').querySelectorAll('[data-i]').forEach(el => {
+    el.onclick = () => { guideStep = Number(el.dataset.i); renderGuide(); };
+  });
+  renderGuideStep();
+  guideUpdateButtons();
+  $('#guideResult').textContent = '';
+  $('#guideResult').style.color = '';
+}
+
+function guideProviderLabel(p) {
+  const name = `${p.model || '未命名模型'} — ${p.id || ''}`;
+  return p.vision === false ? `${name}（未声明看图）` : name;
+}
+
+function renderGuideStep() {
+  const body = $('#guideBody');
+  const step = GUIDE_STEP_KEYS[guideStep];
+  if (step === 'main') {
+    const src = guideForm.llm_source;
+    const sourceOpts = [
+      ['跟随 AstrBot', '跟随 AstrBot（推荐）'],
+      ['手动填写', '手动填写 API'],
+      ['自动', '自动（兼容旧配置）'],
+    ].map(([v, l]) => `<option value="${esc(v)}"${src === v ? ' selected' : ''}>${esc(l)}</option>`).join('');
+    const providerOpts = [
+      '<option value="">自动使用 AstrBot 当前模型</option>',
+      ...guideProviders.map(p => `<option value="${esc(p.id)}"${guideForm.llm_provider_id === p.id ? ' selected' : ''}>${esc(guideProviderLabel(p))}</option>`),
+    ].join('');
+    const providerShow = src === '手动填写' ? ' style="display:none"' : '';
+    const noProvider = (!guideProviders.length)
+      ? `<div class="cfghint guide-warn">没有读到 OpenAI 兼容且支持打标的 AstrBot 提供商；请先在 AstrBot「服务提供商」添加一个看图模型，或改用手动填写。</div>`
+      : '';
+    const keyPh = guideVal('llm_api_key') ? '已设置（留空保持不变）' : '填入 API Key';
+    body.innerHTML = `
+      <div class="guide-title">${esc(GUIDE_STEPS[0])}</div>
+      <div class="guide-desc">自动打标需要「能看图、且接口是 OpenAI /chat/completions 格式」的模型。当前实际来源：${esc(guideSourceDesc || '未配置')}。</div>
+      <div class="cfgrow"><div class="cfgname"><b>模型来源</b><div class="cfghint">推荐跟随 AstrBot，切换 WebUI 模型时会一起切换。</div></div>
+        <div class="cfgctl"><select class="cfgsel" data-g="llm_source">${sourceOpts}</select></div></div>
+      <div id="gProviderRow"${providerShow}>
+        <div class="cfgrow"><div class="cfgname"><b>主要打标模型</b><div class="cfghint">留空表示跟随 AstrBot 当前对话模型。</div></div>
+          <div class="cfgctl"><select class="cfgsel" data-g="llm_provider_id">${providerOpts}</select></div></div>
+        ${noProvider}
+      </div>
+      <div class="guide-locktip" id="gModelLockTip">您已设置打标模型！当前主模型来自 AstrBot，下面的 API 地址 / Key / 模型名 已停用（灰色不可更改）；想改回手填请把「模型来源」切到「手动填写」。</div>
+      <div id="gManual">
+        <div class="cfgrow"><div class="cfgname"><b>API 地址</b><div class="cfghint">填到 /v1 为止，或直接填完整 /chat/completions 端点。</div></div>
+          <div class="cfgctl"><input class="cfgtext" data-g="llm_api_base" value="${esc(guideForm.llm_api_base)}" placeholder="https://.../v1"></div></div>
+        <div class="cfgrow"><div class="cfgname"><b>API Key</b><div class="cfghint">留空表示保持现有密钥不变。</div></div>
+          <div class="cfgctl"><input class="cfgtext" type="password" data-g="llm_api_key" value="" placeholder="${esc(keyPh)}" autocomplete="off"></div></div>
+        <div class="cfgrow"><div class="cfgname"><b>模型名</b><div class="cfghint">必须是支持图片输入的视觉模型。</div></div>
+          <div class="cfgctl"><input class="cfgtext" data-g="llm_model" value="${esc(guideForm.llm_model)}" placeholder="glm-4.6v / qwen-vl-max"></div></div>
+      </div>`;
+  } else if (step === 'backup') {
+    const mainId = guideForm.llm_provider_id;
+    const opts = guideProviders.filter(p => p.id && p.id !== mainId).map(p => {
+      const on = guideForm.llm_provider_pool.has(p.id);
+      return `<label class="mpick${on ? ' on' : ''}"><input type="checkbox" data-g="llm_provider_pool" data-v="${esc(p.id)}"${on ? ' checked' : ''}><span class="mpl">${esc(guideProviderLabel(p))}</span></label>`;
+    }).join('');
+    body.innerHTML = `
+      <div class="guide-title">${esc(GUIDE_STEPS[1])}</div>
+      <div class="guide-desc">主模型限流或报 400 时按顺序自动切换。可以不选；建议至少勾一个不同服务商、且支持看图的模型。</div>
+      <div class="cfgrow"><div class="cfgname"><b>备用模型</b><div class="cfghint">只列 AstrBot 中已配置的 OpenAI 兼容模型。</div></div>
+        <div class="cfgctl cfgmulti">${opts || '<span class="mpskip">没有可选的备用模型</span>'}</div></div>`;
+  } else if (step === 'steal') {
+    body.innerHTML = `
+      <div class="guide-title">${esc(GUIDE_STEPS[2])}</div>
+      <div class="guide-desc">开启后，别人发 QQ 表情时可以收进你的表情包库；收下的图默认先进入待审核。</div>
+      <div class="guide-grid">
+        <div class="cfgrow"><div class="cfgname"><b>偷表情包</b><div class="cfghint">关掉则完全不理会别人的表情。</div></div>
+          <div class="cfgctl"><label class="guide-check"><input type="checkbox" data-g="steal_enabled"${guideForm.steal_enabled ? ' checked' : ''}> 开启</label></div></div>
+        <div class="cfgrow"><div class="cfgname"><b>权限</b><div class="cfghint">默认群友也能喊偷，但图仍要审核。</div></div>
+          <div class="cfgctl"><label class="guide-check"><input type="checkbox" data-g="steal_admin_only"${guideForm.steal_admin_only ? ' checked' : ''}> 只允许管理员偷</label></div></div>
+        <div class="cfgrow"><div class="cfgname"><b>审核</b><div class="cfghint">开启自动通过会让偷来的图直接进库。</div></div>
+          <div class="cfgctl"><label class="guide-check"><input type="checkbox" data-g="steal_auto_approve"${guideForm.steal_auto_approve ? ' checked' : ''}> 偷来直接通过</label></div></div>
+      </div>`;
+  } else if (step === 'daily') {
+    const cur = Number(guideForm.steal_daily_limit) || 0;
+    body.innerHTML = `
+      <div class="guide-title">${esc(GUIDE_STEPS[3])}</div>
+      <div class="guide-desc">每天最多收录几张偷来的表情包，按入库时间统计；满额后当天不再收录，第二天自动恢复。填 0 = 不限制。${guideForm.steal_enabled ? '' : '（当前偷表情是关闭的，这项会先存着，等开启后生效。）'}</div>
+      <div class="guide-stack">
+        <div class="cfgrow"><div class="cfgname"><b>每天上限</b><div class="cfghint">默认 20 张；0 = 不限制。</div></div>
+          <div class="cfgctl"><input class="cfgnum" type="number" min="0" step="1" data-g="steal_daily_limit" value="${cur}"></div></div>
+        <div class="cfgrow"><div class="cfgname"><b>常用取值</b><div class="cfghint">点一下直接填好。</div></div>
+          <div class="cfgctl"><button class="btn chipf" type="button" data-glim="10">10 张</button> <button class="btn chipf" type="button" data-glim="20">20 张</button> <button class="btn chipf" type="button" data-glim="50">50 张</button> <button class="btn chipf" type="button" data-glim="0">不限制</button></div></div>
+      </div>
+      <div class="cfghint">同一会话两次偷之间的冷却时间在「插件配置 → 偷表情包」里单独设置。</div>`;
+    $('#guideBody').querySelectorAll('[data-glim]').forEach(b => {
+      b.onclick = () => {
+        const el = $('#guideBody [data-g="steal_daily_limit"]');
+        if (el) { el.value = b.dataset.glim; guideForm.steal_daily_limit = b.dataset.glim; }
+        $('#guideBody').querySelectorAll('[data-glim]').forEach(x => x.classList.toggle('active', x === b));
+      };
+    });
+  } else if (step === 'freq') {
+    const meta = guideItems.find(x => x.key === 'sticker_frequency');
+    const opts = (meta && meta.options && meta.options.length) ? meta.options : ['关闭', '很少', '适中', '较多', '每条都发'];
+    const freqOpts = opts.map(v => `<option value="${esc(v)}"${guideForm.sticker_frequency === v ? ' selected' : ''}>${esc(v)}</option>`).join('');
+    body.innerHTML = `
+      <div class="guide-title">${esc(GUIDE_STEPS[4])}</div>
+      <div class="guide-desc">这控制模型主动配图的提示词倾向，不改变库存和打标模型。关闭快速通道后频档也不会生效。</div>
+      <div class="cfgrow"><div class="cfgname"><b>自动配图</b><div class="cfghint">模型在回复末尾写 sticker 标签时自动检索并发图。</div></div>
+        <div class="cfgctl"><label class="guide-check"><input type="checkbox" data-g="protocol_mode"${guideForm.protocol_mode ? ' checked' : ''}> 开启快速通道</label></div></div>
+      <div class="cfgrow"><div class="cfgname"><b>发表情包频率</b><div class="cfghint">很少=只在你点名要图时发；适中=约每三四条一张。</div></div>
+        <div class="cfgctl"><select class="cfgsel" data-g="sticker_frequency">${freqOpts}</select></div></div>`;
+  } else {
+    const mainName = guideForm.llm_source === '手动填写'
+      ? (guideForm.llm_model || '未填写模型名')
+      : (guideForm.llm_provider_id || '跟随 AstrBot 当前模型');
+    const backups = Array.from(guideForm.llm_provider_pool);
+    const targetNames = guideTargets.map(t => t.model).join('、') || '尚未生效';
+    body.innerHTML = `
+      <div class="guide-title">${esc(GUIDE_STEPS[5])}</div>
+      <div class="guide-desc">点「保存并测试」会把以上设置写入插件配置，并用真实图片对每个生效模型发一次打标请求；只要有一个模型能返回合法标注 JSON，就代表自动打标可用。</div>
+      <div class="guide-summary">
+        <div><b>主要打标模型</b>${esc(mainName)}</div>
+        <div><b>备用打标模型</b>${esc(backups.length ? backups.join('、') : '不设置')}</div>
+        <div><b>偷表情功能</b>${guideForm.steal_enabled ? '开启' : '关闭'}${guideForm.steal_admin_only ? ' · 仅管理员' : ''}</div>
+        <div><b>每天偷表情上限</b>${(Number(guideForm.steal_daily_limit) || 0) ? Number(guideForm.steal_daily_limit) + ' 张' : '不限制'}</div>
+        <div><b>模型配图频率</b>${esc(guideForm.sticker_frequency)}${guideForm.protocol_mode ? '' : ' · 快速通道关闭'}</div>
+        <div><b>当前生效目标</b>${esc(targetNames)}</div>
+      </div>`;
+  }
+  guideBind();
+  guideToggleManual();
+}
+
+function guideManualLocked() {
+  // 已经选了 AstrBot 的打标模型：手填三项只展示、不可改。
+  // 手动填写永远可编辑；跟随 AstrBot 且真有 provider 时锁定（没 provider 时还要留手填兜底）；
+  // 自动模式以后端确认的「当前生效主模型确实来自 AstrBot」为准，别误锁手填用户。
+  const src = guideForm.llm_source;
+  if (src === '手动填写') return false;
+  if (src === '跟随 AstrBot') return guideProviders.length > 0;
+  return !!guideMainFromAstrbot;
+}
+function guideToggleManual() {
+  const src = guideForm.llm_source;
+  const manual = $('#gManual'), provider = $('#gProviderRow');
+  const locked = guideManualLocked();
+  if (provider) provider.style.display = src === '手动填写' ? 'none' : '';
+  if (manual) {
+    manual.querySelectorAll('[data-g]').forEach(el => {
+      el.disabled = locked;
+      const row = el.closest('.cfgrow');
+      if (row) row.classList.toggle('locked', locked);
+    });
+  }
+  const tip = $('#gModelLockTip');
+  if (tip) tip.classList.toggle('on', locked);
+}
+
+function guideBind() {
+  $('#guideBody').querySelectorAll('[data-g]').forEach(el => {
+    const key = el.dataset.g;
+    const evt = (el.tagName === 'SELECT' || el.type === 'checkbox') ? 'change' : 'input';
+    el.addEventListener(evt, () => {
+      if (key === 'llm_provider_pool') {
+        guideForm.llm_provider_pool = new Set(
+          Array.from($('#guideBody').querySelectorAll('input[data-g="llm_provider_pool"]:checked')).map(x => x.dataset.v)
+        );
+        const lab = el.closest('.mpick');
+        if (lab) lab.classList.toggle('on', el.checked);
+      } else if (el.type === 'checkbox') {
+        guideForm[key] = !!el.checked;
+      } else {
+        guideForm[key] = el.value;
+      }
+      if (key === 'llm_source' || key === 'llm_provider_id') guideToggleManual();
+    });
+  });
+}
+
+function guideCollectPatch() {
+  const patch = {};
+  const eqStr = (k, v) => String(guideVals[k] ?? '') === String(v ?? '');
+  const setStr = (k, v) => { if (!eqStr(k, v)) patch[k] = v; };
+  const setBool = (k, v) => { if (!!guideVals[k] !== !!v) patch[k] = !!v; };
+  const src = guideForm.llm_source;
+  setStr('llm_source', src);
+  if (src === '手动填写') {
+    setStr('llm_api_base', String(guideForm.llm_api_base || '').trim());
+    const key = String(guideForm.llm_api_key || '').trim();
+    if (key) setStr('llm_api_key', key);
+    setStr('llm_model', String(guideForm.llm_model || '').trim());
+    setStr('llm_provider_id', '');
+    setStr('llm_provider_pool', '');
+  } else {
+    setStr('llm_provider_id', String(guideForm.llm_provider_id || '').trim());
+    setStr('llm_provider_pool', Array.from(guideForm.llm_provider_pool).join(','));
+    if (src === '自动') {
+      setStr('llm_api_base', String(guideForm.llm_api_base || '').trim());
+      const key = String(guideForm.llm_api_key || '').trim();
+      if (key) setStr('llm_api_key', key);
+      setStr('llm_model', String(guideForm.llm_model || '').trim());
+    }
+  }
+  setBool('steal_enabled', guideForm.steal_enabled);
+  setBool('steal_admin_only', guideForm.steal_admin_only);
+  setBool('steal_auto_approve', guideForm.steal_auto_approve);
+  setBool('protocol_mode', guideForm.protocol_mode);
+  setStr('sticker_frequency', String(guideForm.sticker_frequency || '适中'));
+  const lim = Number(guideForm.steal_daily_limit);
+  const want = Number.isFinite(lim) ? Math.max(0, Math.round(lim)) : 20;
+  if (Number(guideVals.steal_daily_limit ?? 20) !== want) patch.steal_daily_limit = want;
+  return patch;
+}
+
+async function guideSaveChanges() {
+  const patch = guideCollectPatch();
+  if (Object.keys(patch).length) {
+    const d = await apiPost('api/config/set', { patch });
+    (d.items || []).forEach(it => { guideVals[it.key] = it.value; });
+    guideInitForm();
+  }
+  try {
+    const m = await apiGet('api/model/targets');
+    guideTargets = m.targets || [];
+    guideSourceDesc = m.source || '';
+  } catch (e) { /* 刷新提示失败不影响保存 */ }
+  return patch;
+}
+
+function guideValidate() {
+  if (GUIDE_STEP_KEYS[guideStep] !== 'main') return true;
+  const src = guideForm.llm_source;
+  if (src === '手动填写') {
+    const hasKey = !!String(guideForm.llm_api_key || '').trim() || !!guideVal('llm_api_key');
+    if (!String(guideForm.llm_api_base || '').trim() || !hasKey || !String(guideForm.llm_model || '').trim()) {
+      toast('手动模式需要填 API 地址、Key 和视觉模型名', true);
+      return false;
+    }
+  } else if (!guideProviders.length && !guideTargets.length) {
+    toast('还没读到可用的打标模型，请先到 AstrBot「服务提供商」配置一个看图模型', true);
+    return false;
+  }
+  return true;
+}
+
+async function guideSaveAndTest() {
+  if (!guideValidate()) return;
+  const next = $('#guideNext'), test = $('#guideTest');
+  const old = next ? next.textContent : '';
+  if (next) { next.disabled = true; next.textContent = '处理中…'; }
+  if (test) test.disabled = true;
+  try {
+    markGuideDone();          // 点保存就先写标记，不受后续网络耗时影响
+    await guideSaveChanges();
+    toast('配置已保存，引导不会再自动弹出');
+    await runModelTest('all', '#guideResult');
+  } catch (e) {
+    const out = $('#guideResult');
+    out.textContent = `✗ 配置保存失败：${e.message || e}`;
+    out.style.color = 'var(--bad)';
+    toast(e.message || '配置保存失败', true);
+  } finally {
+    if (next) { next.disabled = false; next.textContent = old || '保存并测试'; }
+    if (test) test.disabled = false;
+    guideUpdateButtons();
+  }
+}
+
+/* 「仅保存配置」：不跑模型测试、不做模型可用性校验。
+   用户没改任何项时 patch 为空，等于原封不动保留现有配置，只是把引导收尾关掉。 */
+async function guideSaveOnly() {
+  const btn = $('#guideSaveOnly');
+  if (btn) { btn.disabled = true; btn.textContent = '保存中…'; }
+  // 标记和关闭放在保存前面：用户只想收尾，不能让网络慢就把他卡在引导里。
+  markGuideDone();
+  closeGuide();
+  try {
+    await guideSaveChanges();
+    toast('配置已保存，引导不会再自动弹出');
+  } catch (e) {
+    toast('配置保存失败：' + (e.message || e), true);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '仅保存配置'; }
+  }
+}
+
+$('#guidePrev').onclick = () => {
+  if (guideStep > 0) { guideStep--; renderGuide(); }
+};
+$('#guideNext').onclick = () => {
+  if (guideStep === GUIDE_STEPS.length - 1) { guideSaveAndTest(); return; }
+  if (!guideValidate()) return;
+  guideStep++;
+  renderGuide();
+};
+$('#guideTest').onclick = () => guideSaveAndTest();
+$('#guideSaveOnly').onclick = () => guideSaveOnly();
+$('#qTestModel').onclick = () => runModelTest('all', '#qTestResult');
+
+/* 旧库用途词回填：后台任务 + 轮询进度，避免十几张图的 LLM 请求把面板卡超时。
+   后端只写 scene 字段，情绪/标签/手改标记都不会被覆盖。 */
+async function runSceneBackfill() {
+  const out = $('#qSceneResult');
+  if (!out) return;
+  out.style.color = '';
+  const start = await apiPost('api/scene/backfill', { force: false });
+  if (!start.started) {
+    out.textContent = start.message || '没有需要回填的表情包';
+    return;
+  }
+  const tick = async () => {
+    let s;
+    try { s = await apiGet('api/scene/backfill/status'); }
+    catch (e) { out.textContent = '✗ 查询进度失败：' + (e.message || e); return; }
+    if (s.running) {
+      out.textContent = `回填中 ${s.done}/${s.total}　成功 ${s.ok}　失败 ${s.failed}　无合适词 ${s.empty}` +
+        (s.skipped_human ? `　跳过手改 ${s.skipped_human}` : '');
+      setTimeout(tick, 1200);
+      return;
+    }
+    out.textContent = `✓ 完成：共 ${s.total} 张，成功 ${s.ok}，失败 ${s.failed}，无合适词 ${s.empty}` +
+      (s.skipped_human ? `，跳过手改 ${s.skipped_human}` : '') +
+      (s.errors && s.errors.length ? `　｜　${s.errors.join('；')}` : '');
+    if (s.failed) out.style.color = 'var(--bad)';
+    load(true);
+  };
+  out.textContent = '已启动，等待后台回填…';
+  setTimeout(tick, 600);
+}
+$('#qSceneBackfill').onclick = () => runSceneBackfill().catch(e => {
+  const out = $('#qSceneResult');
+  out.textContent = '✗ ' + (e.message || e);
+  out.style.color = 'var(--bad)';
+});
+
+/* ================= 配置引导：模态卡片开合 =================
+   「不再自动弹出」三层保险：cookie / localStorage / sessionStorage 挡本地，
+   服务端 guide_dismissed 挡换窗口、清缓存、换设备。
+   打开 / 保存 / 仅保存 / 稍后再说 都会写标记，任一操作之后都不会再自动弹。 */
+const GUIDE_SEEN_KEY = 'sticker_kit_guide_seen_v2';
+const GUIDE_LINK_KEY = 'sticker_kit_guide_link_used_v1';
+let guideMarkSent = false;
+
+function guideWriteLocal() {
+  try { localStorage.setItem(GUIDE_SEEN_KEY, '1'); } catch (e) {}
+  try { sessionStorage.setItem(GUIDE_SEEN_KEY, '1'); } catch (e) {}
+  try { document.cookie = GUIDE_SEEN_KEY + '=1; path=/; max-age=31536000; SameSite=Lax'; } catch (e) {}
+}
+function guideLocalSeen() {
+  try {
+    if (localStorage.getItem(GUIDE_SEEN_KEY) || sessionStorage.getItem(GUIDE_SEEN_KEY)) return true;
+  } catch (e) {}
+  try { return document.cookie.indexOf(GUIDE_SEEN_KEY + '=1') >= 0; } catch (e) { return false; }
+}
+function markGuideDone() {
+  guideWriteLocal();
+  if (guideMarkSent) return;
+  guideMarkSent = true;
+  const patch = { patch: { guide_dismissed: true } };
+  // keepalive：点完立刻刷新/关窗口，这个请求也能发出去；失败无感，本地标记仍然兜底。
+  try {
+    fetch(API + '/api/config/set', {
+      method: 'POST', keepalive: true,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    }).catch(() => {});
+  } catch (e) {}
+  // 插件重启后才认识 guide_dismissed；未重启时这个键会被忽略，本地标记继续兜底。
+  apiPost('api/config/set', patch).catch(() => { guideMarkSent = false; });
+}
+
+function openGuide() {
+  const mask = $('#guideMask');
+  if (!mask) return;
+  mask.classList.add('on');
+  document.body.style.overflow = 'hidden';
+  markGuideDone();             // 打开过就不再自动弹；面板里的按钮仍可随时手动再开
+  guideStep = 0;
+  guideLoaded = true;
+  loadGuide();                 // 每次打开都重新拉配置，保证显示的是最新值
+}
+function closeGuide() {
+  const mask = $('#guideMask');
+  if (!mask) return;
+  mask.classList.remove('on');
+  document.body.style.overflow = '';
+  markGuideDone();
+}
+$('#tabGuideOpen').onclick = openGuide;
+$('#cfgOpenGuide').onclick = openGuide;
+$('#guideClose').onclick = closeGuide;
+$('#guideSkip').onclick = closeGuide;
+$('#guideMask').addEventListener('click', e => { if (e.target === $('#guideMask')) closeGuide(); });
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && $('#guideMask').classList.contains('on')) closeGuide();
+});
+
+/* 深链 ?tab=guide 是手动入口：用完立刻把参数从地址栏去掉，避免刷新/侧边栏反复带参弹出，
+   同一浏览器会话里也只自动开一次。面板里的两个「配置引导」按钮不受这些限制。 */
+const startTab = new URLSearchParams(location.search).get('tab');
+if (startTab && ['stock', 'review', 'queue', 'brief', 'cfg'].includes(startTab)) switchTab(startTab);
+
+(async function guideAutoOpen() {
+  if (startTab === 'guide') {
+    let used = false;
+    try { used = !!sessionStorage.getItem(GUIDE_LINK_KEY); } catch (e) {}
+    if (!used) {
+      try { sessionStorage.setItem(GUIDE_LINK_KEY, '1'); } catch (e) {}
+      try {
+        const u = new URL(location.href);
+        u.searchParams.delete('tab');
+        history.replaceState(null, '', u.pathname + u.search + u.hash);
+      } catch (e) {}
+      setTimeout(openGuide, 320);
+    }
+    return;
+  }
+  let serverDone = false;
+  try {
+    const cfg = await apiGet('api/config');
+    serverDone = !!cfg.guide_dismissed;
+    if (serverDone) guideWriteLocal();
+  } catch (e) {}
+  if (!serverDone && !guideLocalSeen()) setTimeout(openGuide, 420);
+})();
 
 load();
 </script>

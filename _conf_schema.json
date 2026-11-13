@@ -1,4 +1,14 @@
 {
+  "guide_dismissed": {
+    "description": "内部状态：配置引导是否已经打开过、保存过或点了「稍后再说」。为 true 时面板不再自动弹出引导；不影响「配置引导」按钮手动打开。此项不显示在配置页，也不会改动任何打标/偷表情设置",
+    "type": "bool",
+    "default": false
+  },
+  "ban_english_emotion": {
+    "description": "禁止英文情绪词：开启后，模型打标返回的 happy / sad / emo 等英文情绪词会翻成受控词表内的中文词，翻不出来的直接丢弃；快速通道检索词里的英文情绪词也会转成中文。关闭则保留模型原始输出",
+    "type": "bool",
+    "default": true
+  },
   "llm_source": {
     "description": "打标模型来源：自动 / 跟随 AstrBot / 手动填写。自动=下面三项填全了就用它们，否则跟随 AstrBot 的提供商；跟随 AstrBot=只用在「AstrBot 提供商」里选的那个；手动填写=只用下面三项",
     "type": "string",
@@ -122,6 +132,11 @@
     "description": "快速通道总开关：AI 在回复末尾输出 <sticker> 标签即可自动配图（本地检索选图，一次回复就带图，不再多轮工具调用）；关掉后下方的配图频率档位也不再生效",
     "type": "bool",
     "default": true
+  },
+  "allow_bare_sticker_json": {
+    "description": "无标签裸 JSON 兜底：默认关闭。开启后只接受回复末尾独立一行的 {\"query\":\"情绪词 画面词\"}，且 query 必须包含已知情绪词；避免把普通 JSON 回答误当作配图指令",
+    "type": "bool",
+    "default": false
   },
   "brief_mode": {
     "description": "库存概览（分类注入）：把库存里有哪些情绪压成一行拼进 system_prompt，AI 不检索也知道有什么。自动=按张数自动挑到预算用完；手动=只注入面板「注入分类」页勾选的；关闭=不注入。注意 system_prompt 每轮都要重新发送和计费",

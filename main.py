@@ -51,6 +51,17 @@ _STEAL_MARK = "【偷表情包】"
 
 DEFAULT_NAMED_KEYWORDS = "表情包,斗图,发个图,发张图,来张图,配个图,发表情,来一张"
 
+# [FIX #1/#3/#5/#11] 从 _EMOTION_VOCAB 派生协议用词表，避免两处手写漂移。
+# 注意：_EMOTION_VOCAB 定义在本文件更下方，这里用函数延迟取，不能在模块加载时就求值。
+def _protocol_vocab_words() -> list[str]:
+    """协议里推荐给模型的检索词：情绪词 + 用途词，剔除无检索价值的兜底词。
+
+    _SCENE_VOCAB 定义在下方，本函数是运行时调用（模块加载时还没初始化），安全。
+    """
+    useless = {"其他"}
+    return [w for w in (_EMOTION_VOCAB + "," + _SCENE_VOCAB).split(",")
+            if w and w not in useless]
+
 # 频档 → 提示词语气。全部使用正向引导，不再出现「不要每条都配」这类否定起手，
 # 避免小模型把「默认不发」当成结论。off 表示不注入协议。
 _FREQ_POLICY = {
@@ -94,35 +105,146 @@ _FREQ_LABELS = {
     "always": "每条都发",
 }
 
+# [FIX #9] extra 是用户可控文本，里面若含 </sticker> 会提前闭合标签、截断真正的 query。
+# 这里做最小必要转义：把半角尖括号换成全角，既保留可读性，又不会破坏 _TAG_RE 的匹配边界。
+def _sanitize_extra(text: str) -> str:
+    s = str(text or "").strip()
+    if not s:
+        return ""
+    s = s.replace("<", "＜").replace(">", "＞")
+    # 顺带掐掉与协议冲突的显式指令词，避免用户自定义把默认语义整段顶掉
+    # （只做软提示，不删内容——保留用户原意，但标注优先级）
+    return s
 
-def _protocol_body(level: str, extra: str = "", with_vocab: bool = True) -> str:
+
+# [FIX #7] 少数模型会把 JSON 里的半角引号/冒号写成全角，导致 json.loads 失败。
+# 解析前统一做一次全角→半角替换（只动 ASCII 结构字符，不碰中文正文）。
+_FULLWIDTH_MAP = str.maketrans({
+    "＂": '"', "“": '"', "”": '"',
+    "‘": "'", "’": "'",
+    "：": ":", "，": ",", "｛": "{", "｝": "}",
+    "［": "[", "］": "]", "　": " ",
+})
+
+def _normalize_json_punct(text: str) -> str:
+    return str(text or "").translate(_FULLWIDTH_MAP)
+
+
+def _chat_completions_url(base: str) -> str:
+    """用户可能填完整端点，也可能只填到 /v1；避免拼出两次 /chat/completions。"""
+    s = str(base or "").strip().rstrip("/")
+    if s.lower().endswith("/chat/completions"):
+        return s
+    return f"{s}/chat/completions"
+
+
+def _message_content(message) -> str:
+    """兼容 content 分段数组、纯思考模型把 JSON 放在 reasoning_content 的情况。"""
+    if not isinstance(message, dict):
+        return ""
+    content = message.get("content")
+    if isinstance(content, list):
+        return "".join(
+            str(part.get("text") or "")
+            for part in content
+            if isinstance(part, dict)
+        )
+    if isinstance(content, dict):
+        return str(content.get("text") or "")
+    if isinstance(content, str) and content.strip():
+        return content
+    for key in ("reasoning_content", "reasoning", "thinking", "analysis"):
+        alt = message.get(key)
+        if isinstance(alt, str) and alt.strip():
+            return alt
+        if isinstance(alt, list):
+            text = "".join(
+                str(part.get("text") or "")
+                for part in alt
+                if isinstance(part, dict)
+            )
+            if text.strip():
+                return text
+    return str(content or "")
+
+
+# 模型测试用：32x32 白底红块 PNG，避免依赖本地是否已有表情包图片。
+_TEST_PNG_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAALUlEQVR42mP4T2PAMGrBqAVD"
+    "wYKAACxo1IJRC0YtGLVg1IIRZ8FolTlqwagFAN/8W4ZKi2ZGAAAAAElFTkSuQmCC"
+)
+
+
+def _protocol_body(level: str, extra: str = "", with_vocab: bool = True,
+                   has_brief: bool | None = None) -> str:
     """按频档拼出协议正文；extra 为用户自定义的附加约束。
 
     with_vocab=False 用于已经注入「库存概览」的情况：那时库存里实际有哪些情绪
     已经写在下面了，再说一遍内置词表纯属重复，白占每轮 token。
+    has_brief 显式声明调用方是否会在 body 之后拼接库存概览；为 None 时按
+    with_vocab 推断（兼容旧调用点）。[FIX #2]
     """
-    policy = _FREQ_POLICY.get(level, _FREQ_POLICY["normal"])
-    vocab = (
-        "尽量用词表里有的词（开心 大笑 微笑 害羞 撒娇 卖萌 得意 兴奋 期待 惊讶 疑惑 无语 无奈 "
-        "嫌弃 尴尬 委屈 难过 大哭 生气 冷漠 疲惫 害怕 嘲讽 挑衅 温柔 安慰 鼓励 敷衍 拒绝 求饶 认同 感谢）；"
-        if with_vocab
-        else "尽量用下方库存里实际有的词；"
-    )
+    # [FIX #3] off 档不产出任何协议文本，避免拼出「标记 + 写法 + 无配图指令」的半截协议。
+    if level == "off":
+        return ""
+
+    policy = _FREQ_POLICY.get(level)
+    if policy is None:
+        # [FIX #10] 非法档位静默回退会掩盖配置错误，这里记一条 warning。
+        logger.warning(f"[StickerKit] 未知配图频档 {level!r}，按「适中」处理")
+        policy = _FREQ_POLICY["normal"]
+
+    if has_brief is None:
+        has_brief = not with_vocab
+
+    show_brief = not with_vocab and has_brief
+    if show_brief:
+        # 有库存概览时不再重复整张词表；示例只负责说明「情绪词 + 画面词」的写法。
+        vocab = "优先用下方库存里实际有的词；"
+        examples = "示例只说明写法，如「收到 敬礼」「比爱心 双马尾」「开心 挥手」；实际用词从下方库存挑选"
+    else:
+        # 没有库存概览（包括异常调用）时统一退回受控词表，避免出现悬空的「下方库存」。
+        if not with_vocab:
+            logger.warning(
+                "[StickerKit] _protocol_body 以 with_vocab=False 调用但未提供库存概览，"
+                "退回使用内置词表，避免出现悬空的「下方库存」"
+            )
+        words = _protocol_vocab_words()
+
+        def pick(*candidates: str) -> str:
+            for word in candidates:
+                if word in words:
+                    return word
+            return words[0] if words else "开心"
+
+        vocab = "尽量用词表里有的词（" + " ".join(words) + "）；"
+        examples = (
+            f"如「{pick('开心')} 挥手」「{pick('委屈')} 低头」"
+            f"「{pick('收到', '认同')} 敬礼」「{pick('比爱心', '卖萌')} 双马尾」"
+            f"「猫 {pick('无语')}」"
+        )
+
+    # [FIX #6] 关键词数量与检索侧计分对齐：_W_TAG_EXTRA 封顶覆盖 2 个额外画面词，
+    # 给 5 个词不会更准，只会多烧 token。明确约束为 2~3 个。
     body = (
         f"{_PROTOCOL_MARK} {policy}"
-        "写法：把正文照常写完，然后在最末尾另起一行输出标签：\n"
-        '<sticker>{"query":"三五个关键词"}</sticker>\n'
-        "query 用常见情绪词 + 画面词，如「得意 自夸」「委屈」「震惊」「猫 无语」，"
+        "写法：把正文照常写完，然后在最末尾另起一行，按下面这一行的格式输出"
+        "（query 的值必须替换成本次实际检索词，不要照抄示例；"
+        "尖括号必须一起输出，不要省略，不要只写中间的花括号）：\n"
+        '<sticker>{"query":"情绪词 画面词"}</sticker>\n'
+        "标签内必须是英文半角引号和冒号，不要用全角；"
+        "query 用 2~3 个词：用途词或情绪词 + 画面词，"
+        f"{examples}，"
         f"{vocab}"
         "系统会本地检索最匹配的一张图并自动追加在回复后，用户看不到标签本身。"
         "没有合适的图就不输出标签，系统会自动只发文字；除这个标签外不要使用其他表情占位格式。"
     )
-    extra = str(extra or "").strip()
+
+    extra = _sanitize_extra(extra)
     if extra:
-        body = f"{body}\n{extra}"
+        # [FIX #4] extra 与正文冲突时以正文为准，明确标注优先级，避免近因效应压过默认语义。
+        body = f"{body}\n附加约束（仅在不与上文冲突时生效，冲突时以上文为准）：{extra}"
     return body
-
-
 def _est_tokens(text: str) -> int:
     """粗估 token 数，只用于预算控制。
 
@@ -140,6 +262,54 @@ _TAG_RE = re.compile(
     r"(?:<|&lt;|\\<)\s*/\s*sticker\s*(?:>|&gt;|\\>)",
     re.IGNORECASE | re.DOTALL,
 )
+# 宽松版：容忍全角尖括号、缺尾 >、反斜杠转义
+_TAG_RE_LOOSE = re.compile(
+    r"(?:＜|<|&lt;|\\<)\s*sticker\s*(?:＞|>|&gt;|\\>)?"
+    r"(.*?)"
+    r"(?:＜|<|&lt;|\\<)\s*/\s*sticker\s*(?:＞|>|&gt;|\\>)?",
+    re.IGNORECASE | re.DOTALL,
+)
+
+# 裸 JSON 兜底：模型有时只输出 {"query":"..."}，不包 <sticker>。
+# 仅用于已出现 sticker 外壳但内部为空的补救；无标签回复默认不走这条路径。
+_BARE_TAG_RE = re.compile(
+    r'\{\s*[“"\'‘]?\s*query\s*[”"\'’]?\s*[：:]\s*'
+    r'[“"\'‘]?([^"”\'\'}]{1,60})[”"\'’]?\s*\}',
+    re.IGNORECASE,
+)
+
+# 可选裸 JSON 兜底：归一化标点后，只允许「末尾独立一行、整行就是一个 query JSON」。
+_BARE_JSON_LINE_RE = re.compile(
+    r"\{\s*['\"]?\s*query\s*['\"]?\s*:\s*"
+    r"['\"]?([^'\"}]{1,60})['\"]?\s*\}",
+    re.IGNORECASE,
+)
+
+
+def _strip_bare_json_line(text: str) -> tuple[str, str] | None:
+    """从末尾独立 JSON 行里取 query，返回 (query, 去掉该行后的正文)。
+
+    约束刻意比普通 search 严：整行必须只有 JSON，且 query 至少带一个受控情绪词
+    或已登记的口语别名，避免把「{"query":"手机"}」这类普通技术回答吞掉。
+    _EMOTION_SET / _ALIAS 定义在本文件更下方，运行时调用时已经初始化完毕。
+    """
+    tail = str(text or "").rstrip()
+    if not tail:
+        return None
+    line_start = tail.rfind("\n") + 1
+    raw_line = tail[line_start:]
+    match = _BARE_JSON_LINE_RE.fullmatch(_normalize_json_punct(raw_line.strip()))
+    if not match:
+        return None
+    query = str(match.group(1) or "").strip()
+    if not query:
+        return None
+    if not (
+        any(word in query for word in _EMOTION_SET)
+        or any(alias in query for alias in _ALIAS)
+    ):
+        return None
+    return query, tail[:line_start].rstrip()
 
 
 class _QQFaceImage(BaseMessageComponent):
@@ -222,23 +392,129 @@ _ALIAS = {
     "压力": "疲惫", "加班": "疲惫", "熬夜": "疲惫",
 }
 
-# 打标提示词：输出字段刻意压到最少（name/emotions/tags/description/visible_text/confidence），
-# 并且强制「主情绪只能一个、次情绪不确定就留空」，从源头减少错标。
+# 受控「用途词」表：这张图通常用来回应什么 / 画了什么标志性动作。
+# 和情绪表刻意分开：情绪是「开心/认同/卖萌」这类抽象状态，用途是「收到/拥抱/比爱心」
+# 这类具体交际动作。检索时人用的是后者，所以这一维必须独立存在且权重不低于情绪。
+# 表里不放抽象情绪词（安慰/感谢/求饶等已在 _EMOTION_VOCAB 里），避免两维互相污染。
+_SCENE_VOCAB = (
+    "收到,遵命,明白,好的,确认,点头,摇头,点赞,鼓掌,敬礼,"
+    "比爱心,拥抱,摸头,牵手,亲亲,举高高,"
+    "挥手,招手,你好,再见,晚安,拜拜,欢迎,"
+    "捂脸,扶额,摊手,耸肩,偷看,逃跑,溜了,跪下,鞠躬,举手,指向,"
+    "干杯,吃饭,喝茶,睡觉,看书,加班,摸鱼,庆祝,撒花,等待,"
+    "道歉,认错,道谢,加油,催更,求助"
+)
+_SCENE_SET = {w for w in _SCENE_VOCAB.split(",") if w}
+
+# 口语 → 用途标准词。_ALIAS 里那些「抱抱→安慰 / 点头→认同」是旧库的兼容映射，
+# 保留不动；这里额外补上「动作→用途」方向，让搜大白话也能命中新字段。
+_SCENE_ALIAS = {
+    "好嘞": "收到", "收到啦": "收到", "收到！": "收到", "明白了": "明白", "明白啦": "明白",
+    "好哒": "好的", "好呀": "好的", "ok": "收到", "OK": "收到", "Ok": "收到",
+    # 近义说法一律收敛到唯一标准词，否则模型这次写「抱抱」下次写「拥抱」，
+    # 检索时两个词互不包含也过不了模糊阈值，会出现「明明有图却搜不到」。
+    "比心": "比爱心", "比心心": "比爱心", "比个心": "比爱心", "爱心": "比爱心",
+    "发射爱心": "比爱心", "爱心发射": "比爱心",
+    "抱一抱": "拥抱", "抱抱": "拥抱", "抱住": "拥抱", "搂抱": "拥抱",
+    "相拥": "拥抱", "贴贴": "拥抱",
+    "摸摸头": "摸头", "摸头杀": "摸头",
+    "挥挥手": "挥手", "招招手": "招手",
+    "鼓个掌": "鼓掌", "点个赞": "点赞", "竖大拇指": "点赞",
+    "弯腰": "鞠躬", "对不起": "道歉", "抱歉": "道歉", "道个歉": "道歉",
+    "谢谢啦": "道谢", "多谢": "道谢", "感谢": "道谢",
+    "溜了溜了": "溜了", "跑路": "逃跑", "开溜": "逃跑",
+    "干杯吧": "干杯", "碰杯": "干杯",
+    "加油打气": "加油", "打气": "加油", "帮帮忙": "求助",
+}
+
+# 常见英文情绪词 → 受控中文词表。模型偶尔会无视「只能从表里选」直接吐 happy/sad，
+# 与其丢掉整条标注，不如翻成中文；查不到的英文词在 ban_english_emotion 开启时不进库。
+_EN_EMOTION_MAP = {
+    "happy": "开心", "glad": "开心", "joy": "开心", "joyful": "开心", "delighted": "开心",
+    "laugh": "大笑", "laughing": "大笑", "lol": "大笑", "lmao": "大笑",
+    "smile": "微笑", "smiling": "微笑", "grin": "微笑",
+    "shy": "害羞", "blush": "害羞", "embarrassed": "尴尬", "awkward": "尴尬",
+    "cute": "卖萌", "kawaii": "卖萌", "adorable": "卖萌",
+    "proud": "得意", "smug": "得意", "excited": "兴奋", "thrilled": "兴奋",
+    "surprised": "惊讶", "shocked": "惊讶", "amazed": "惊讶",
+    "confused": "疑惑", "puzzled": "疑惑",
+    "speechless": "无语", "helpless": "无奈", "annoyed": "嫌弃", "disdain": "嫌弃",
+    "sad": "难过", "unhappy": "难过", "upset": "难过", "depressed": "难过", "emo": "难过",
+    "cry": "大哭", "crying": "大哭", "tears": "大哭", "sob": "大哭",
+    "angry": "生气", "mad": "生气", "furious": "生气", "rage": "生气",
+    "cold": "冷漠", "indifferent": "冷漠", "tired": "疲惫", "exhausted": "疲惫",
+    "scared": "害怕", "afraid": "害怕", "fear": "害怕", "terrified": "害怕",
+    "sarcastic": "嘲讽", "sarcasm": "嘲讽", "mock": "嘲讽", "teasing": "嘲讽",
+    "provocative": "挑衅", "threat": "威胁", "threatening": "威胁",
+    "gentle": "温柔", "tender": "温柔", "comfort": "安慰", "encourage": "鼓励",
+    "perfunctory": "敷衍", "refuse": "拒绝", "reject": "拒绝",
+    "beg": "求饶", "begging": "求饶", "mercy": "求饶",
+    "agree": "认同", "approval": "认同", "thanks": "感谢", "thank": "感谢",
+    "hello": "打招呼", "hi": "打招呼", "hey": "打招呼", "greet": "打招呼",
+    "bye": "告别", "goodbye": "告别", "farewell": "告别",
+    "thinking": "沉思", "pensive": "沉思", "dazed": "发呆", "blank": "发呆",
+    "snicker": "偷笑", "smirk": "奸笑", "evil": "奸笑",
+    "broken": "崩溃", "breakdown": "崩溃", "doubt": "怀疑", "suspicious": "怀疑",
+    "other": "其他", "neutral": "其他",
+}
+_LATIN_RE = re.compile(r"[A-Za-z]")
+_MANUAL_LLM_KEYS = frozenset({"llm_api_base", "llm_api_key", "llm_model"})
+
+
+def _has_latin(s) -> bool:
+    return bool(_LATIN_RE.search(str(s or "")))
+
+
+def _cn_emotion(word) -> str:
+    """英文情绪词翻成词表内中文词；非英文原样返回，查不到返回空串。"""
+    w = str(word or "").strip()
+    if not _has_latin(w):
+        return w
+    key = re.sub(r"[^A-Za-z]", "", w).lower()
+    if key in _EN_EMOTION_MAP:
+        return _EN_EMOTION_MAP[key]
+    for tok in re.split(r"[^A-Za-z]+", w.lower()):
+        if tok in _EN_EMOTION_MAP:
+            return _EN_EMOTION_MAP[tok]
+    return ""
+
+
+# 打标提示词：emotions（抽象情绪）与 scene（具体用途/动作）是两条独立的轴。
+# 旧版把「禁写用途」写进规则 4/6，模型只能把「收到」压成「认同」、「比心」压成「卖萌」，
+# 导致检索时人用的词一个都搜不到。现在用途单独进 scene，description 仍保持客观。
 _PROMPT = (
     "你是表情包标注员。看这张图，只输出一个 JSON，不要解释、不要 markdown 代码块。\n"
-    '{"name":"简短名称(<=10字)","emotions":["主情绪"],"tags":["画面关键词"],'
+    '{"name":"简短名称(<=10字)","emotions":["主情绪"],"scene":["用途词"],"tags":["画面关键词"],'
     '"description":"客观描述画面(20-50字)","visible_text":"图上文字，没有则空串",'
     '"confidence":0.8}\n'
     "规则（必须遵守）：\n"
     f"1. emotions 的第一个必须是这张图最主要的情绪，只能从这张表里选：{_EMOTION_VOCAB}。\n"
     "2. emotions 最多 2 个。第二个只在画面明确表现出时才加；不确定就只留一个。宁可少标，不许凑数。\n"
     "3. 禁止近义词堆叠：「无语/沉默/嫌弃」这类其实是一个判断，只保留最贴的那一个。\n"
-    "4. tags 最多 3 个，只写看得见的画面元素（人物/动作/道具），不要写情绪、不要写风格套话、不要写用途。\n"
-    "5. confidence 是你对 emotions 的把握，0~1。没把握就写 0.4 以下，不要硬猜。\n"
-    "6. 只描述画面本身，禁止写「适合表达…」这类用途推测。\n"
+    f"4. scene 写「这张图通常用来回应什么 / 画了什么标志性动作」，只能从这张表里选：{_SCENE_VOCAB}。"
+    "最多 3 个，宁缺毋滥；表里没有合适的就输出空数组 []。这是检索时最有用的字段，"
+    "必须优先写具体动作（收到、拥抱、比爱心、敬礼），不要写抽象情绪。\n"
+    "5. tags 最多 3 个，只写看得见的静态画面元素（人物/道具/服饰/背景），不要写情绪、"
+    "不要写风格套话；动作和用途交给 scene，别在 tags 里重复。\n"
+    "6. confidence 是你对 emotions 的把握，0~1。没把握就写 0.4 以下，不要硬猜。\n"
+    "7. description 只客观描述画面本身，禁止写「适合表达…」这类用途推测；用途只写在 scene 里。\n"
+    "8. emotions、scene、tags 一律只写简体中文，禁止英文、拼音、缩写"
+    "（happy / sad / emo / lol 这类都不允许）；情绪表里没有对应词就写「其他」，"
+    "用途表里没有就留空数组，不要自造英文词。\n"
+)
+
+# 旧库回填专用：只问 scene，省 token 也更聚焦（不重算 emotions/tags/description）。
+_SCENE_PROMPT = (
+    "你是表情包用途标注员。看这张图，只输出一个 JSON，不要解释、不要 markdown 代码块。\n"
+    '{"scene":["用途词"]}\n'
+    f"用途词 = 这张图通常用来回应什么、画了什么标志性动作，只能从这张表里选：{_SCENE_VOCAB}。\n"
+    "最多 3 个，宁缺毋滥；必须优先写具体动作（收到、拥抱、比爱心、敬礼），不要写抽象情绪。\n"
+    "图上文字若本身就是一句回应（如「收到！」），要选对应的用途词。\n"
+    "表里没有合适的就输出 {\"scene\":[]}。只写简体中文，不要自造词。\n"
 )
 
 # 检索权重：主情绪远高于其他字段。旧库没有主次之分时，emotions[0] 自动当主情绪。
+_W_SCENE = 3.2        # scene 用途/动作词。比情绪略高：「收到/比爱心/拥抱」比「认同/卖萌」区分度高
 _W_PRIMARY = 3.0      # emotions[0]，这张图最主要表达的情绪
 _W_SECONDARY = 1.5    # emotions[1:] 次情绪
 _W_TAGS = 1.2         # 画面关键词
@@ -466,6 +742,9 @@ class StickerKit(Star):
         # 按模型（base|model）记两件事，切候选模型时才不会互相牵连：
         # _effort_bad = 这个接口不认 reasoning_effort；_prov_down = 这个模型被限流到什么时候
         self._effort_bad: set[str] = set()
+        # 按模型记住不认哪些请求参数：reasoning_effort / max_tokens / temperature。
+        # 避免新模型每张图都先吃两三次 400 才进入正确形态。
+        self._compat_bad: dict[str, set[str]] = {}
         self._prov_down: dict[str, float] = {}
         self._last_model = ""
         # 偷表情包：按会话缓存对方刚发的 QQ 表情（umo -> [{url, summary, at}]），
@@ -730,7 +1009,7 @@ class StickerKit(Star):
 
     def _build_protocol_prompt(self) -> str:
         """按频档生成协议；custom_protocol_prompt 非空时整段替换内置文案。"""
-        extra = str(self.config.get("protocol_prompt_extra") or "").strip()
+        extra = _sanitize_extra(self.config.get("protocol_prompt_extra"))
         custom = str(self.config.get("custom_protocol_prompt") or "").strip()
         if not custom and self._frequency_level() == "off":
             self._brief_state = {}
@@ -743,14 +1022,14 @@ class StickerKit(Star):
                 custom = f"{_PROTOCOL_MARK} {custom}"
             head = f"{custom}\n{extra}" if extra else custom
         else:
-            head = _protocol_body(self._frequency_level(), extra, with_vocab=not btext)
+            # [FIX #2] 显式告诉 _protocol_body 尾部会不会拼库存概览，杜绝悬空指代。
+            head = _protocol_body(
+                self._frequency_level(),
+                extra,
+                with_vocab=not btext,
+                has_brief=bool(btext),
+            )
         return f"{head}\n{btext}" if btext else head
-
-    # ---------- 库存概览：把分类压成一行拼进 system_prompt ----------
-    #
-    # system_prompt 不是"存"在模型那边的：LLM 接口无状态，每一轮都要把完整的
-    # messages（含 system）重新发一遍、重新计费。所以这里给的是"每轮固定成本"，
-    # 库存越大越贵，必须按预算截断而不是无脑全塞。
 
     def _brief_mode(self) -> str:
         raw = str(self.config.get("brief_mode", "自动") or "").strip()
@@ -782,7 +1061,8 @@ class StickerKit(Star):
             if not it.get("enabled", True):
                 continue
             raw = [str(e).strip() for e in (it.get("emotions") or []) if str(e).strip()]
-            if not raw:
+            raw_scene = [str(s).strip() for s in (it.get("scene") or []) if str(s).strip()]
+            if not raw and not raw_scene:
                 continue
             seen: set[str] = set()
             for idx, e in enumerate(raw):
@@ -794,6 +1074,15 @@ class StickerKit(Star):
                 seen.add(canon)
                 count[canon] = count.get(canon, 0) + 1
                 weight[canon] = weight.get(canon, 0) + (2 if idx == 0 else 1)
+            # 用途词权重 +3（高于主情绪 +2）：预算紧张时优先保留「收到/比爱心」这类
+            # 真正会被写进 query 的词，而不是先把抽象情绪塞满。
+            for s in raw_scene:
+                canon = _SCENE_ALIAS.get(s, s)
+                if canon in ("其他", "未知") or canon in seen:
+                    continue
+                seen.add(canon)
+                count[canon] = count.get(canon, 0) + 1
+                weight[canon] = weight.get(canon, 0) + 3
         rows = [(w, count[w], weight[w]) for w in count]
         rows.sort(key=lambda r: (-r[2], -r[1], r[0]))
         self._emotion_cache = rows
@@ -979,6 +1268,15 @@ class StickerKit(Star):
                 for k, v in _ALIAS.items():
                     if len(k) >= 2 and k in w:
                         extra.append(v)
+            # 用途词单独补一层：旧 _ALIAS 把「抱抱→安慰 / 点头→认同」压成了抽象情绪，
+            # 这里再补出「拥抱 / 点头」，让新字段和旧库都能被同一句大白话检索到。
+            sc = _SCENE_ALIAS.get(w)
+            if sc:
+                extra.append(sc)
+            elif len(w) > 2:
+                for k, v in _SCENE_ALIAS.items():
+                    if len(k) >= 2 and k in w:
+                        extra.append(v)
         return list(dict.fromkeys(words + extra))
 
     @staticmethod
@@ -1079,6 +1377,9 @@ class StickerKit(Star):
         tags = [str(t).strip() for t in (item.get("tags") or []) if str(t).strip()]
         intents = [str(t).strip() for t in (item.get("intents") or []) if str(t).strip()]
         score = 0.0
+        scenes = [str(s).strip() for s in (item.get("scene") or []) if str(s).strip()]
+        if scenes:
+            score += _W_SCENE * self._best_match(keywords, scenes, fuzzy)
         if emos:
             score += _W_PRIMARY * self._best_match(keywords, emos[:1], fuzzy)
             if len(emos) > 1:
@@ -1497,17 +1798,61 @@ class StickerKit(Star):
             return
         stripped = False
         matched_query = ""
+        # 无 sticker 外壳的裸 JSON 可能就是用户讨论的普通 JSON，默认不吞；
+        # 需要容错模型漏标签时可显式开启 allow_bare_sticker_json。
+        raw_bare = self.config.get("allow_bare_sticker_json", False)
+        allow_bare_json = (
+            raw_bare
+            if isinstance(raw_bare, bool)
+            else str(raw_bare).strip().lower()
+            in {"1", "true", "yes", "on", "开", "开启", "是"}
+        )
         for comp in chain:
             if not isinstance(comp, Plain) or not isinstance(comp.text, str):
                 continue
-            m = _TAG_RE.search(comp.text)
-            if not m:
+            text = comp.text
+
+            # 1) 严格标签 <sticker>...</sticker>
+            m = _TAG_RE.search(text)
+            used_re = _TAG_RE if m else None
+
+            # 2) 宽松标签：全角尖括号 / 缺尾 >
+            if m is None:
+                m = _TAG_RE_LOOSE.search(text)
+                if m:
+                    used_re = _TAG_RE_LOOSE
+
+            # 3) 裸 JSON（可选）：默认关闭；开启后也只接受末尾独立 JSON 行，
+            #    且 query 必须带情绪语义，避免误伤「普通 JSON 示例」。
+            if m is None:
+                if allow_bare_json:
+                    bare = _strip_bare_json_line(text)
+                    if bare is not None:
+                        q, cleaned = bare
+                        stripped = True
+                        if q and not matched_query:
+                            matched_query = q
+                        comp.text = re.sub(r"\n{3,}", "\n\n", cleaned).rstrip()
                 continue
+
             stripped = True
-            if not matched_query:
-                matched_query = m.group(1).strip()
-            comp.text = _TAG_RE.sub("", comp.text)
+            q = (m.group(1) or "").strip()
+            # 外壳命中但 group(1) 为空（<sticker></sticker>{...} 这种）：再扒一次裸 JSON
+            if not q:
+                m2 = _BARE_TAG_RE.search(text)
+                if m2:
+                    q = (m2.group(1) or "").strip()
+                    text = text[: m2.start()] + text[m2.end():]
+            if q and not matched_query:
+                matched_query = q
+            comp.text = used_re.sub("", text)
+            # 清理可能残留的另一层外壳
+            if used_re is not _TAG_RE:
+                comp.text = _TAG_RE.sub("", comp.text)
+            else:
+                comp.text = _TAG_RE_LOOSE.sub("", comp.text)
             comp.text = re.sub(r"\n{3,}", "\n\n", comp.text).rstrip()
+
         if not stripped:
             return
         self._last_tag_hit = _now()
@@ -1528,12 +1873,27 @@ class StickerKit(Star):
         item = None
         if send:
             query = matched_query
+            # [FIX #7] 模型可能把 JSON 内的半角引号/冒号写成全角，先归一化再解析；
+            # 解析失败时才退回把整段当 query（此时也做一次归一化，避免污染切词）。
             try:
-                payload = json.loads(query)
+                payload = json.loads(_normalize_json_punct(query))
                 if isinstance(payload, dict):
                     query = str(payload.get("query") or "")
             except Exception:
-                pass
+                query = _normalize_json_punct(query)
+            # 禁止英文情绪词：模型把 query 写成 "happy 挥手" 时翻成中文检索词。
+            # 只认已知英文情绪词，型号/专名等其它英文原样保留；JSON 解析失败的整串不动。
+            if (
+                self._ban_english_emotion()
+                and _has_latin(query)
+                and not str(query).lstrip().startswith("{")
+            ):
+                parts: list[str] = []
+                for tok in re.split(r"(\s+)", str(query)):
+                    cn = _cn_emotion(tok) if _has_latin(tok) else ""
+                    parts.append(cn if cn and not _has_latin(cn) else tok)
+                query = "".join(parts).strip()
+
             item, pick_info = self.pick_for_query(query)
             self._last_pick = {**pick_info, "ts": _now(), "session": event.unified_msg_origin[:40]}
             if item is None:
@@ -1678,7 +2038,7 @@ class StickerKit(Star):
             review_txt = f"，待审核 {pending_review} 张" if pending_review else ""
             steal_txt = "，偷表情包已开" if self._steal_on() else ""
             yield event.plain_result(
-                f"StickerKit v1.11.2：库存 {total} 张{review_txt}"
+                f"StickerKit v1.12.0：库存 {total} 张{review_txt}"
                 f"（本次启动迁移自陪伴插件 {self._migrated} 张），打标中 {analyzing}{steal_txt}\n"
                 f"打标模型：{self._llm_source_desc()}\n"
                 f"配图频率：档位={label} · 概率={float(self.config.get('send_probability', 1.0)):.0%}"
@@ -1731,8 +2091,35 @@ class StickerKit(Star):
     # 打标仍然是插件自己发 HTTP 请求（这样 reasoning_effort / 超时 / 并发都还能控），
     # 只是把 api_base / key / model 从 AstrBot 的提供商配置里读出来，省得用户填两遍。
 
-    # 这些类型的接口不是 OpenAI 的 /chat/completions 形状，拿来打标会直接 404/400
-    _PROVIDER_SKIP = ("anthropic", "claude", "gemini", "google", "bedrock", "vertex")
+    # 这些类型不是 /chat/completions 形状；其余主要靠运行时类继承判断，
+    # 避免新版 AstrBot 新增的 Responses / Token Plan 类型被误当成 OpenAI 兼容接口。
+    _PROVIDER_SKIP = ("anthropic", "claude", "gemini", "google", "bedrock", "vertex", "responses")
+    _OPENAI_COMPAT_TYPES = frozenset({
+        "openai_chat_completion", "zhipu_chat_completion", "groq_chat_completion",
+        "xai_chat_completion", "xiaomi_chat_completion", "longcat_chat_completion",
+        "mirarouter_chat_completion", "ssycloud_chat_completion",
+        "openrouter_chat_completion", "aihubmix_chat_completion",
+    })
+
+    def _is_openai_chat_provider(self, provider, ptype: str) -> bool:
+        low = str(ptype or "").lower()
+        if any(t in low for t in self._PROVIDER_SKIP):
+            return False
+        try:
+            mro = type(provider).__mro__
+            if any(c.__name__ == "ProviderOpenAIOfficial" for c in mro):
+                # Responses API 虽然继承 OpenAI 客户端，但端点不是 /chat/completions。
+                return not any("responses" in c.__name__.lower() for c in mro)
+        except Exception:
+            pass
+        try:
+            client = getattr(provider, "client", None)
+            completions = getattr(getattr(client, "chat", None), "completions", None)
+            if completions is not None and hasattr(completions, "create"):
+                return True
+        except Exception:
+            pass
+        return low in self._OPENAI_COMPAT_TYPES
 
     def _provider_candidates(self) -> list[dict]:
         """AstrBot 里可用的 OpenAI 兼容聊天提供商。`_key` 是内部字段，不要直接吐给前端。"""
@@ -1750,40 +2137,85 @@ class StickerKit(Star):
             try:
                 cfg = dict(getattr(p, "provider_config", {}) or {})
                 ptype = str(cfg.get("type") or "")
-                if any(t in ptype.lower() for t in self._PROVIDER_SKIP):
+                if not self._is_openai_chat_provider(p, ptype):
                     continue
                 base = str(cfg.get("api_base") or cfg.get("base_url") or "").strip().rstrip("/")
                 try:
-                    keys = list(p.get_keys())
+                    keys = p.get_keys()
                 except Exception:
-                    keys = list(cfg.get("key") or [])
+                    keys = cfg.get("key") or []
+                if isinstance(keys, str):
+                    keys = [keys]
+                else:
+                    try:
+                        keys = list(keys or [])
+                    except TypeError:
+                        keys = []
                 key = next((str(k).strip() for k in keys if str(k).strip()), "")
+                if not key:
+                    raw_key = cfg.get("key")
+                    if isinstance(raw_key, str):
+                        key = raw_key.strip()
+                    elif isinstance(raw_key, (list, tuple)):
+                        key = next((str(k).strip() for k in raw_key if str(k).strip()), "")
                 model = ""
                 try:
                     model = str(p.get_model() or "").strip()
                 except Exception:
                     pass
+                # 新版 AstrBot 的 model 直接在合并后的 provider_config 里；
+                # model_config 只是旧配置迁移前的兼容字段。
+                if not model:
+                    model = str(cfg.get("model") or "").strip()
                 if not model:
                     mc = cfg.get("model_config") or {}
                     if isinstance(mc, dict):
                         model = str(mc.get("model") or "").strip()
                 if not (base and key and model):
                     continue
+
+                headers: dict[str, str] = {}
+                for source in (
+                    getattr(p, "request_headers", {}) or {},
+                    cfg.get("custom_headers") or {},
+                ):
+                    if isinstance(source, dict):
+                        for hk, hv in source.items():
+                            headers[str(hk)] = str(hv)
+                extra_body = cfg.get("custom_extra_body")
+                if not isinstance(extra_body, dict):
+                    extra_body = {}
+                mods = cfg.get("modalities") or getattr(p, "modalities", None)
+                vision = "image" in [str(x).lower() for x in mods] if isinstance(mods, (list, tuple, set)) else None
                 out.append({
-                    "id": str(cfg.get("id") or ""),
+                    "id": str(cfg.get("id") or getattr(p, "provider_id", "") or ""),
                     "model": model,
                     "type": ptype,
                     "base": base,
                     "_key": key,
+                    "headers": headers,
+                    "extra_body": dict(extra_body),
+                    "proxy": str(cfg.get("proxy") or "").strip(),
+                    "timeout": cfg.get("timeout", 120),
+                    "vision": vision,
                 })
-            except Exception:
+            except Exception as exc:
+                logger.debug(f"[StickerKit] 跳过不可用提供商：{type(exc).__name__} {exc}")
                 continue
         self._prov_cache = (now, out)
         return out
 
     def _provider_default_id(self) -> str:
+        """优先用 WebUI 当前切换的提供商，而不是启动时持久化的默认 ID。"""
         try:
-            return str(getattr(self.context.provider_manager, "default_chat_provider_id", "") or "")
+            manager = self.context.provider_manager
+            inst = getattr(manager, "curr_provider_inst", None)
+            if inst is not None:
+                cfg = getattr(inst, "provider_config", {}) or {}
+                pid = str(cfg.get("id") or getattr(inst, "provider_id", "") or "").strip()
+                if pid:
+                    return pid
+            return str(getattr(manager, "default_chat_provider_id", "") or "")
         except Exception:
             return ""
 
@@ -1800,7 +2232,13 @@ class StickerKit(Star):
 
     def _provider_public(self) -> list[dict]:
         return [
-            {"id": c["id"], "model": c["model"], "type": c["type"], "base": c["base"]}
+            {
+                "id": c["id"],
+                "model": c["model"],
+                "type": c["type"],
+                "base": c["base"],
+                "vision": c.get("vision"),
+            }
             for c in self._provider_candidates()
         ]
 
@@ -1812,6 +2250,23 @@ class StickerKit(Star):
             return "manual"
         return "auto"
 
+    def _main_model_is_astrbot(self) -> bool:
+        """当前生效的主模型是否来自 AstrBot 已配置的提供商。
+
+        用于「您已设置打标模型！」时锁死手填三项：既然主模型走 provider，
+        下面的地址/Key/模型名就不该再起作用，留着只会让人误以为能覆盖。
+        """
+        try:
+            base, key, model = self._llm_conf()
+        except Exception:
+            return False
+        if not (base and key and model):
+            return False
+        return any(
+            c["base"] == base and c["model"] == model and c["_key"] == key
+            for c in self._provider_candidates()
+        )
+
     def _llm_conf(self) -> tuple[str, str, str]:
         base = str(self.config.get("llm_api_base") or "").strip().rstrip("/")
         key = str(self.config.get("llm_api_key") or "").strip()
@@ -1821,8 +2276,12 @@ class StickerKit(Star):
             return base, key, model
         pb, pk, pm = self._provider_conf()
         if src == "astrbot":
-            # 明确指定跟随 AstrBot：手填的三项只当兜底（比如 provider 被删了）
-            return (pb or base, pk or key, pm or model)
+            # 明确指定跟随 AstrBot：provider 三项齐全就整体使用，绝不逐项混搭
+            # （旧写法 pb or base / pk or key 会拼出「A 的地址 + B 的 Key」直接 401）。
+            # provider 整个读不到时才整体回退到手填配置。
+            if pb and pk and pm:
+                return pb, pk, pm
+            return base, key, model
         # auto：手填的齐全就用手填（不破坏老用户），缺哪项用 AstrBot 的补上
         if base and key and model:
             return base, key, model
@@ -1850,11 +2309,12 @@ class StickerKit(Star):
         """实际可用的打标目标：主模型在前，候选池按配置顺序去重追加。
 
         每项 {base, key, model, label, pk}；pk 用于按模型记熔断状态。
+        AstrBot 提供商附带的自定义请求头、extra_body、代理和视觉能力也一并保留。
         """
         out: list[dict] = []
         seen: set[str] = set()
 
-        def add(base: str, key: str, model: str, label: str) -> None:
+        def add(base: str, key: str, model: str, label: str, meta: dict | None = None) -> None:
             base = str(base or "").strip().rstrip("/")
             key = str(key or "").strip()
             model = str(model or "").strip()
@@ -1865,17 +2325,29 @@ class StickerKit(Star):
                 return
             seen.add(pk)
             host = re.sub(r"^https?://", "", base).split("/")[0]
-            out.append({
+            target = {
                 "base": base,
                 "key": key,
                 "model": model,
                 "label": label or f"{model} @ {host}",
                 "pk": pk,
-            })
+            }
+            if meta:
+                for field in ("headers", "extra_body", "proxy", "timeout", "vision", "id"):
+                    if field in meta:
+                        target[field if field != "id" else "provider_id"] = meta[field]
+            out.append(target)
 
-        # 主模型：手填 / AstrBot 提供商按 llm_source 决定，就是原来那套
+        # 主模型：手填 / AstrBot 提供商按 llm_source 决定；若来自 provider，把附加配置带上。
         base, key, model = self._llm_conf()
-        add(base, key, model, "")
+        main_meta = next(
+            (
+                c for c in self._provider_candidates()
+                if c["base"] == base and c["model"] == model and c["_key"] == key
+            ),
+            None,
+        )
+        add(base, key, model, "", main_meta)
 
         # 候选：只认还在 AstrBot 里的 provider，被删掉的静默跳过
         pool = self._provider_pool_ids()
@@ -1884,7 +2356,7 @@ class StickerKit(Star):
             for pid in pool:
                 c = cands.get(pid)
                 if c:
-                    add(c["base"], c["_key"], c["model"], f'{c["model"]} — {c["id"]}')
+                    add(c["base"], c["_key"], c["model"], f'{c["model"]} — {c["id"]}', c)
         return out
 
     def _targets_ready(self) -> list[dict]:
@@ -2032,29 +2504,46 @@ class StickerKit(Star):
         self._apply_meta(item, meta, used, force)
 
     async def _try_target(
-        self, item: dict, tgt: dict, messages: list, has_alt: bool
+        self, item: dict, tgt: dict, messages: list, has_alt: bool,
+        probe: bool = False,
     ) -> tuple[dict | None, str]:
         """拿一个模型打这一张。返回 (标注, 最后一条错误)，失败时标注为 None。
 
-        has_alt=True 表示后面还有别的模型可换：这时候遇到限流就直接放弃本模型，
-        把时间留给能用的那个；只有它是最后一根稻草才走「等冷却再重试」的老路。
+        has_alt=True 表示后面还有别的模型可换：遇到限流就直接放弃本模型，
+        把时间留给能用的那个；只有最后一根稻草才走「等冷却再重试」。
+        probe=True 用于面板「模型测试」：不走队列节流、不写熔断、不做退避等待。
         """
+        bad = set(self._compat_bad.get(tgt["pk"], set()))
         payload = {
             "model": tgt["model"],
             "messages": messages,
-            "max_tokens": 800,
-            "temperature": 0.2,
+            ("max_completion_tokens" if "max_tokens" in bad else "max_tokens"): 800,
         }
+        if "temperature" not in bad:
+            payload["temperature"] = 0.2
         # 打标是纯分类任务，不需要长思考。glm-5.x 这类「始终思考」的模型默认会烧
         # 400+ reasoning token（实测单张 20s），降到 low 后 3.6s，标注结果一模一样。
         effort = str(self.config.get("llm_reasoning_effort", "low") or "").strip().lower()
-        if effort in ("low", "medium", "high", "max") and tgt["pk"] not in self._effort_bad:
+        if (
+            effort in ("low", "medium", "high", "max")
+            and tgt["pk"] not in self._effort_bad
+            and "reasoning_effort" not in bad
+        ):
             payload["reasoning_effort"] = effort
+        for key, value in (tgt.get("extra_body") or {}).items():
+            payload.setdefault(key, value)
         headers = {"Authorization": f"Bearer {tgt['key']}", "Content-Type": "application/json"}
+        for hk, hv in (tgt.get("headers") or {}).items():
+            if str(hk).lower() not in ("authorization", "content-type"):
+                headers.setdefault(str(hk), str(hv))
+        post_kwargs = {}
+        if str(tgt.get("proxy") or "").strip():
+            post_kwargs["proxy"] = str(tgt["proxy"]).strip()
 
         async def _call_once() -> dict:
             async with self._http().post(
-                f"{tgt['base']}/chat/completions", json=payload, headers=headers
+                _chat_completions_url(tgt["base"]),
+                json=payload, headers=headers, **post_kwargs,
             ) as resp:
                 text = await resp.text()
                 if resp.status in (429, 503):
@@ -2065,12 +2554,9 @@ class StickerKit(Star):
                     raise _RateLimited(f"HTTP {resp.status}: {text[:150]}", retry_after)
                 if resp.status != 200:
                     raise RuntimeError(f"HTTP {resp.status}: {text[:200]}")
-                content = json.loads(text)["choices"][0]["message"].get("content")
-            if isinstance(content, list):  # 少数服务商把 content 返回成分段数组
-                content = "".join(
-                    str(part.get("text") or "") for part in content if isinstance(part, dict)
-                )
-            content = re.sub(r"<think>.*?</think>", "", content or "", flags=re.S).strip()
+                data = json.loads(text)
+                content = _message_content(data["choices"][0]["message"])
+            content = re.sub(r"[<＜]think[>＞].*?[<＜]/think[>＞]", "", content or "", flags=re.S).strip()
             content = re.sub(r"```(?:json)?", "", content).strip()
             m = re.search(r"\{.*", content, re.S)
             if not m:
@@ -2078,7 +2564,11 @@ class StickerKit(Star):
             meta = None
             for cand in _json_candidates(m.group(0)):
                 fixed = _repair_truncated_json(cand)
-                for v in (fixed, fixed.replace("，", ",").replace("：", ":")):
+                for v in (
+                    fixed,
+                    fixed.replace("，", ",").replace("：", ":"),
+                    _normalize_json_punct(fixed),
+                ):
                     try:
                         meta = json.loads(v)
                         break
@@ -2090,29 +2580,35 @@ class StickerKit(Star):
                 raise ValueError(f"返回不是有效 JSON：{content[:150]}")
             return meta
 
+        def remember_bad(field: str) -> None:
+            self._compat_bad.setdefault(tgt["pk"], set()).add(field)
+            if field == "reasoning_effort":
+                self._effort_bad.add(tgt["pk"])
+
         meta = None
         last_err = ""
         for attempt in range(3):
             try:
-                await self._llm_gate()
+                if not probe:
+                    await self._llm_gate()
                 meta = await _call_once()
+                last_err = ""  # 降级重试成功后不要把上一次 400 当成最终结果
                 break
             except _RateLimited as exc:
                 last_err = f"第{attempt + 1}次尝试: {exc}"[:200]
+                if probe:
+                    break
                 cooldown = max(exc.retry_after, 10.0)
                 # 按模型记熔断：后面排队的那几百张会先挑没冷却的那个用
                 self._prov_down[tgt["pk"]] = max(
                     self._prov_down.get(tgt["pk"], 0.0), _now() + cooldown
                 )
                 if has_alt:
-                    # 还有别的模型能顶上，不在这一棵树上等
                     logger.warning(
                         f"[StickerKit] {tgt['model']} 限流({item.get('name')}) {last_err}；"
                         f"该模型冷却 {cooldown:.0f}s，改用候选模型"
                     )
                     break
-                # 它是唯一/最后一个可用的：设全队列冷却，让 _llm_gate 去等，
-                # 不在这里 sleep（sleep 会一直占着 worker，把整个队列拖死）。
                 self._llm_cooldown_until = max(self._llm_cooldown_until, _now() + cooldown)
                 logger.warning(
                     f"[StickerKit] 上游限流/过载({item.get('name')}) {last_err}；全队列冷却 {cooldown:.0f}s"
@@ -2120,29 +2616,83 @@ class StickerKit(Star):
             except asyncio.CancelledError:
                 raise
             except RuntimeError as exc:
-                # 少数网关不认 reasoning_effort 会直接 400：自动摘掉该字段重试，
-                # 并按模型记住，别让 100 张图每张都先失败一次。
-                # 注意只有 400 才摘 —— 旧版无条件 pop，500 重试一次就悄悄退回
-                # 「始终思考」，后面几张又变成 20 秒/张。
-                if "HTTP 400" in str(exc) and "reasoning_effort" in payload:
-                    payload.pop("reasoning_effort", None)
-                    self._effort_bad.add(tgt["pk"])
+                err = str(exc)
+                low = err.lower()
+                # 不同服务商对 400 的报错格式差异很大：优先按报错字段名处理，
+                # 再把可选参数逐个摘掉。只针对 400，避免 500 时误改请求形态。
+                if "HTTP 400" in err:
+                    if "reasoning_effort" in payload and (
+                        "reasoning_effort" in low or "unsupported" in low or "unrecognized" in low
+                    ):
+                        payload.pop("reasoning_effort", None)
+                        remember_bad("reasoning_effort")
+                        last_err = f"第{attempt + 1}次尝试: {exc}"[:200]
+                        logger.warning(f"[StickerKit] {tgt['model']} 不接受 reasoning_effort，已移除后重试")
+                        continue
+                    if "max_tokens" in payload and (
+                        "max_tokens" in low or "max_completion_tokens" in low
+                    ):
+                        payload["max_completion_tokens"] = payload.pop("max_tokens")
+                        remember_bad("max_tokens")
+                        last_err = f"第{attempt + 1}次尝试: {exc}"[:200]
+                        logger.warning(f"[StickerKit] {tgt['model']} 需要 max_completion_tokens，已切换字段重试")
+                        continue
+                    if "temperature" in payload and (
+                        "temperature" in low or "unsupported" in low or "unrecognized" in low
+                    ):
+                        payload.pop("temperature", None)
+                        remember_bad("temperature")
+                        last_err = f"第{attempt + 1}次尝试: {exc}"[:200]
+                        logger.warning(f"[StickerKit] {tgt['model']} 不接受 temperature，已移除后重试")
+                        continue
+                    # 报错没写字段名时，按「可选参数 → 限长参数 → 温度」的顺序降级。
+                    if "reasoning_effort" in payload:
+                        payload.pop("reasoning_effort", None)
+                        remember_bad("reasoning_effort")
+                    elif "temperature" in payload:
+                        payload.pop("temperature", None)
+                        remember_bad("temperature")
+                    elif "max_tokens" in payload:
+                        payload["max_completion_tokens"] = payload.pop("max_tokens")
+                        remember_bad("max_tokens")
+                    else:
+                        last_err = f"第{attempt + 1}次尝试: {exc}"[:200]
+                        logger.warning(f"[StickerKit] 打标失败({item.get('name')}) {last_err}")
+                        if not probe and attempt < 2:
+                            await asyncio.sleep(1.5 * (attempt + 1))
+                        continue
                     last_err = f"第{attempt + 1}次尝试: {exc}"[:200]
-                    logger.warning(
-                        f"[StickerKit] {tgt['model']} 不接受 reasoning_effort（{exc}），"
-                        f"该模型改用默认思考强度"
-                    )
+                    logger.warning(f"[StickerKit] {tgt['model']} 400，已降级请求参数后重试：{err[:160]}")
                     continue
                 last_err = f"第{attempt + 1}次尝试: {exc}"[:200]
                 logger.warning(f"[StickerKit] 打标失败({item.get('name')}) {last_err}")
-                if attempt < 2:
+                if not probe and attempt < 2:
                     await asyncio.sleep(1.5 * (attempt + 1))
             except Exception as exc:
                 last_err = f"第{attempt + 1}次尝试: {exc}"[:200]
                 logger.warning(f"[StickerKit] 打标失败({item.get('name')}) {last_err}")
-                if attempt < 2:
+                if not probe and attempt < 2:
                     await asyncio.sleep(1.5 * (attempt + 1))
         return meta, last_err
+
+    def _norm_scenes(self, raw) -> list[str]:
+        """模型输出 / 回填结果 → 用途词表内的标准词，最多 3 个。"""
+        out: list[str] = []
+        for s in raw or []:
+            w = str(s).strip()[:12]
+            if not w:
+                continue
+            canon = w if w in _SCENE_SET else _SCENE_ALIAS.get(w)
+            if canon and canon in _SCENE_SET and canon not in out:
+                out.append(canon)
+        return out[:3]
+
+    def _ban_english_emotion(self) -> bool:
+        """禁止英文情绪词：默认开启，只有显式关掉才允许英文标签进库。"""
+        raw = self.config.get("ban_english_emotion", True)
+        if isinstance(raw, bool):
+            return raw
+        return str(raw).strip().lower() not in ("0", "false", "no", "off", "关", "关闭", "否")
 
     def _apply_meta(self, item: dict, meta: dict, model: str, force: bool = False) -> None:
         """把模型输出写回条目。手改过的字段默认不覆盖（force=True 才盖）。"""
@@ -2150,12 +2700,19 @@ class StickerKit(Star):
         emos_raw = [str(t).strip()[:12] for t in (meta.get("emotions") or []) if str(t).strip()]
         # 归一化到词表：词表外的先查别名（委屈巴巴→委屈、沉默→无语），
         # 同义情绪自然合并成一个（模型的「无语/沉默/嫌弃」其实是同一个判断）。
+        # ban_english_emotion 开启时：英文情绪词先翻成中文，翻不出来直接丢，
+        # 绝不让它以 happy / sad 这种形式进库污染检索词表。
+        ban_en = self._ban_english_emotion()
         emos: list[str] = []
         for e in emos_raw:
+            if ban_en and _has_latin(e):
+                e = _cn_emotion(e)
+                if not e:
+                    continue
             canon = e if e in _EMOTION_SET else _ALIAS.get(e)
             if canon and canon in _EMOTION_SET and canon not in emos:
                 emos.append(canon)
-        if not emos and emos_raw:
+        if not emos and emos_raw and not ban_en:
             emos = emos_raw[:1]  # 全都不认识就留第一个，别把整条标注丢掉
         conf = self._norm_conf(meta.get("confidence"))
         if conf is not None and conf < 0.6:
@@ -2167,11 +2724,15 @@ class StickerKit(Star):
             s = str(t).strip()[:12]
             if not s or s in seen or s in _EMOTION_SET or s in _ALIAS:
                 continue  # 情绪词/别名混进 tags 会绕过主次权重，直接丢掉
+            if ban_en and _has_latin(s) and _cn_emotion(s):
+                continue  # 已知英文情绪词不许混进 tags
             seen.add(s)
             tags.append(s)
+        scenes = self._norm_scenes(meta.get("scene"))
         updates = {
             "name": str(meta.get("name") or item.get("name") or "未命名")[:16],
             "emotions": emos,
+            "scene": scenes,
             "tags": tags[:4],
             "description": str(meta.get("description") or "")[:200],
             "visible_text": str(meta.get("visible_text") or "")[:200],
@@ -2179,7 +2740,7 @@ class StickerKit(Star):
         for field, val in updates.items():
             if field in human:
                 continue
-            if field in ("emotions", "tags") and not val:
+            if field in ("emotions", "tags", "scene") and not val:
                 continue  # 模型没给就别清空已有标注
             item[field] = val
         item["analysis_meta"] = {
@@ -2681,6 +3242,10 @@ class StickerKit(Star):
         register(f"{API_PREFIX}/queue/pause", self._api_queue_pause, ["POST"], "队列暂停/继续")
         register(f"{API_PREFIX}/queue/clear", self._api_queue_clear, ["POST"], "清空待打标")
         register(f"{API_PREFIX}/queue/retry", self._api_queue_retry, ["POST"], "批量重新排队")
+        register(f"{API_PREFIX}/model/targets", self._api_model_targets, ["GET"], "打标模型列表")
+        register(f"{API_PREFIX}/model/test", self._api_model_test, ["POST"], "打标模型测试")
+        register(f"{API_PREFIX}/scene/backfill", self._api_scene_backfill, ["POST"], "旧库用途词回填")
+        register(f"{API_PREFIX}/scene/backfill/status", self._api_scene_backfill_status, ["GET"], "用途词回填进度")
         register(f"{API_PREFIX}/config", self._api_config, ["GET"], "配置读取")
         register(f"{API_PREFIX}/config/set", self._api_config_set, ["POST"], "配置保存")
         register(f"{API_PREFIX}/brief", self._api_brief, ["GET"], "库存概览设置")
@@ -2713,6 +3278,7 @@ class StickerKit(Star):
             "协议与文案",
             (
                 "protocol_mode",
+                "allow_bare_sticker_json",
                 "brief_mode",
                 "brief_budget",
                 "brief_groups",
@@ -2726,7 +3292,7 @@ class StickerKit(Star):
         ("AI 工具与发送", ("admin_only", "enable_send", "enable_search", "top_k", "search_detail", "list_page_size", "separate_send_gap_ms", "write_lock_seconds")),
         ("检索与导入", ("fuzzy_search", "min_score", "min_margin", "blocked_tags",
                        "auto_tag_on_upload", "auto_tag_on_approve", "tag_batch_limit", "max_image_mb")),
-        ("LLM 视觉打标", ("llm_source", "llm_provider_id", "llm_provider_pool", "llm_api_base", "llm_api_key", "llm_model", "llm_concurrency", "llm_min_interval", "llm_max_image_side", "llm_reasoning_effort")),
+        ("LLM 视觉打标", ("llm_source", "llm_provider_id", "llm_provider_pool", "llm_api_base", "llm_api_key", "llm_model", "ban_english_emotion", "llm_concurrency", "llm_min_interval", "llm_max_image_side", "llm_reasoning_effort")),
         ("偷表情包", ("steal_enabled", "steal_admin_only", "steal_proactive", "steal_auto_approve",
                      "steal_cooldown", "steal_daily_limit", "steal_max_mb")),
     )
@@ -2754,6 +3320,8 @@ class StickerKit(Star):
         except Exception:
             cur = {}
         provs = self._provider_candidates()
+        # 锁定态只算一次，别在几十个配置项里各扫一遍 Provider 列表
+        main_is_astrbot = self._main_model_is_astrbot()
 
         def mk(k: str, meta: dict, group: str) -> dict:
             options = meta.get("options") or []
@@ -2794,6 +3362,11 @@ class StickerKit(Star):
                         "【没读到可用的 AstrBot 提供商】候选模型只能从 AstrBot 已配置的"
                         " OpenAI 兼容提供商里挑，先去「服务提供商」加一个。"
                     )
+            elif k == "allow_bare_sticker_json":
+                hint = (
+                    "默认关闭：普通回复末尾的 {\"query\":\"...\"} 不会被当成配图指令。"
+                    "仅当模型经常漏写 <sticker> 外壳时才建议开启；开启后仍要求 JSON 独占末行且带情绪词。"
+                )
             elif k == "steal_enabled":
                 pend = sum(1 for it in self._items if _review_state(it) == "pending")
                 hint = (
@@ -2875,6 +3448,13 @@ class StickerKit(Star):
                     "跟随 AstrBot = 只用上面选的提供商；手动填写 = 只用下面三项。"
                 )
                 hint += f"　·　当前实际使用：{self._llm_source_desc()}"
+
+            locked = k in _MANUAL_LLM_KEYS and main_is_astrbot
+            if locked:
+                hint = (
+                    "您已设置打标模型！当前主模型来自 AstrBot，本项已停用（灰色不可更改）；"
+                    "想改回手填请把「打标模型来源」切到「手动填写」。　·　" + hint
+                )
             return {
                 "key": k,
                 "group": group,
@@ -2885,6 +3465,7 @@ class StickerKit(Star):
                 "label": self._short_label(meta.get("description")),
                 "secret": k == "llm_api_key",
                 "multi": k == "llm_provider_pool",
+                "locked": locked,
             }
 
         items, placed = [], set()
@@ -2934,9 +3515,17 @@ class StickerKit(Star):
         logger.info(f"[StickerKit] 配置已热更新：并发={conc} 间隔={interval}s 模糊搜索={self._fuzzy_enabled()}")
 
     async def _api_config(self):
+        # 引导「不再自动弹出」状态跟配置一起落盘：浏览器 localStorage 在 WebUI 壳里
+        # 可能被隔离或清空，只有服务端状态才能保证换窗口/清缓存后也不再弹。
+        raw_done = self.config.get("guide_dismissed", False)
+        guide_done = (
+            raw_done if isinstance(raw_done, bool)
+            else str(raw_done).strip().lower() in {"1", "true", "on", "yes", "开"}
+        )
         return self._ok({
             "items": self._cfg_items(),
             "path": str(self._cfg_path),
+            "guide_dismissed": guide_done,
         })
 
     async def _api_config_set(self):
@@ -2945,10 +3534,17 @@ class StickerKit(Star):
         if not patch:
             return self._err("没有要保存的改动")
         schema = self._cfg_schema()
+        # 主模型来自 AstrBot 时，手填三项即使前端被绕过也不写，避免和 provider 混搭。
+        # 同一次提交把来源切成「手动填写」时必须放行，否则永远切不回来。
+        incoming = str(patch.get("llm_source", self.config.get("llm_source") or "")).strip()
+        switching_to_manual = incoming in ("手动填写", "手动", "manual")
+        locked_manual = not switching_to_manual and self._main_model_is_astrbot()
         applied = {}
         for k, v in patch.items():
             meta = schema.get(k)
             if not meta:
+                continue
+            if locked_manual and k in _MANUAL_LLM_KEYS:
                 continue
             t = meta.get("type", "string")
             try:
@@ -3104,6 +3700,7 @@ class StickerKit(Star):
             "name": it.get("name"),
             "tags": it.get("tags"),
             "emotions": it.get("emotions"),
+            "scene": it.get("scene") or [],
             "intents": it.get("intents"),
             "description": it.get("description"),
             "visible_text": it.get("visible_text"),
@@ -3136,7 +3733,7 @@ class StickerKit(Star):
                 "data_dir": str(self._data_dir),
                 "queue": self._queue_stats(),
                 "llm": self._llm_source_desc() if llm_ready else "",
-                "version": "1.11.2",
+                "version": "1.12.0",
             },
         }
 
@@ -3301,9 +3898,9 @@ class StickerKit(Star):
                 if new != str(item.get(field) or ""):
                     item[field] = new
                     changed.add(field)
-        for field in ("tags", "emotions", "intents"):
+        for field in ("tags", "emotions", "scene", "intents"):
             if field in payload:
-                cap = 6 if field == "tags" else 8
+                cap = 6 if field == "tags" else (3 if field == "scene" else 8)
                 new = [str(t).strip()[:12] for t in (payload[field] or []) if str(t).strip()][:cap]
                 if new != [str(t) for t in (item.get(field) or [])]:
                     item[field] = new
@@ -3529,6 +4126,240 @@ class StickerKit(Star):
         queued = sum(1 for it in targets if self._queue_analysis(it))
         return self._ok({"queued": queued, "total": len(targets),
                          "stats": self._queue_stats()})
+
+    # ---------- 用途词（scene）回填 ----------
+    #
+    # 旧库没有 scene 字段，靠「重打标」补不了：worker 看到 _has_label(item) 就直接跳过，
+    # force=True 又会连带重算情绪/标签，把手改过的字段一起覆盖。所以单独走一条轻量链路：
+    # 只问模型 scene，只写 scene，human 标记里有 scene 的条目一律不动。
+
+    async def _api_scene_backfill(self):
+        """启动后台回填。API 立刻返回，前端轮询 status，避免十几张图的请求把 WebUI 卡超时。"""
+        data = await quart_request.get_json(silent=True) or {}
+        state = getattr(self, "_scene_backfill", None)
+        if state and state.get("running"):
+            return self._err("用途词回填正在进行中，等它跑完再点")
+        targets = self._llm_targets()
+        if not targets:
+            return self._err(
+                "没有可用的打标模型：先在配置引导里选主模型，"
+                "或到 AstrBot「服务提供商」加一个支持图片的模型"
+            )
+        force = bool(data.get("force"))
+        try:
+            limit = max(1, min(int(data.get("limit") or 50), 200))
+        except (TypeError, ValueError):
+            limit = 50
+        pool = [it for it in self._approved_items() if it.get("enabled", True)]
+        if not force:
+            pool = [it for it in pool if not (it.get("scene") or [])]
+        pool = pool[:limit]
+        if not pool:
+            return self._ok({
+                "started": False, "total": 0,
+                "message": "没有需要回填的表情包（都已填过用途词；想重填请勾 force）",
+            })
+        self._scene_backfill = {
+            "running": True, "total": len(pool), "done": 0, "ok": 0,
+            "failed": 0, "empty": 0, "skipped_human": 0,
+            "errors": [], "started_at": _now(), "force": force,
+        }
+        self._scene_backfill_task = asyncio.create_task(
+            self._scene_backfill_worker(pool, targets, force)
+        )
+        return self._ok({
+            "started": True, "total": len(pool), "force": force,
+            "message": f"已启动：{len(pool)} 张图在后台回填用途词，只写 scene 字段",
+        })
+
+    async def _api_scene_backfill_status(self):
+        state = getattr(self, "_scene_backfill", None)
+        if not state:
+            return self._ok({
+                "running": False, "total": 0, "done": 0, "ok": 0,
+                "failed": 0, "empty": 0, "skipped_human": 0, "errors": [],
+            })
+        return self._ok({**state, "errors": list(state.get("errors") or [])})
+
+    async def _scene_backfill_worker(
+        self, items: list[dict], targets: list[dict], force: bool
+    ) -> None:
+        state = self._scene_backfill
+        for item in items:
+            label = str(item.get("name") or item.get("id") or "?")[:20]
+            try:
+                # 图片文件丢了时 _probe_messages 会退回内嵌小红块 PNG —— 那会把
+                # 测试图的用途词标到这张图身上。回填必须直接跳过，不能将就。
+                img_path = self._img_dir / str(item.get("stored_name") or "")
+                if not img_path.exists():
+                    raise RuntimeError("图片文件不存在，已跳过")
+                messages = await self._probe_messages(item, _SCENE_PROMPT)
+                meta, last_err = None, ""
+                for ti, tgt in enumerate(targets):
+                    meta, last_err = await self._try_target(
+                        item, tgt, messages, ti + 1 < len(targets), probe=True
+                    )
+                    if meta is not None:
+                        break
+                if meta is None:
+                    raise RuntimeError(last_err or "所有模型都失败")
+                scenes = self._norm_scenes(meta.get("scene"))
+                if not scenes:
+                    state["empty"] += 1
+                elif "scene" in (item.get("human") or []):
+                    state["skipped_human"] += 1  # 手改过的用途词一律不覆盖
+                else:
+                    item["scene"] = scenes
+                    state["ok"] += 1
+            except Exception as exc:
+                state["failed"] += 1
+                if len(state["errors"]) < 8:
+                    state["errors"].append(f"{label}: {str(exc)[:120]}")
+            finally:
+                state["done"] += 1
+                if state["done"] % 5 == 0:
+                    self._save_index(immediate=True)
+        self._save_index(immediate=True)
+        state["running"] = False
+        state["finished_at"] = _now()
+        logger.info(
+            "[StickerKit] 用途词回填完成：%d 张，成功 %d，失败 %d，无合适词 %d"
+            % (state["total"], state["ok"], state["failed"], state["empty"])
+        )
+
+    # ---------- 打标模型测试 / 配置引导 ----------
+
+    def _target_public(self, tgt: dict) -> dict:
+        now = _now()
+        return {
+            "pk": tgt["pk"],
+            "model": tgt["model"],
+            "label": tgt.get("label") or tgt["model"],
+            "provider_id": tgt.get("provider_id") or "",
+            "vision": tgt.get("vision"),
+            "down": round(max(0.0, self._prov_down.get(tgt["pk"], 0.0) - now), 0),
+        }
+
+    async def _api_model_targets(self):
+        targets = self._llm_targets()
+        return self._ok({
+            "providers": self._provider_public(),
+            "targets": [self._target_public(t) for t in targets],
+            "source": self._llm_source_desc(),
+            "ready": bool(targets),
+            "main_from_astrbot": self._main_model_is_astrbot(),
+        })
+
+    async def _probe_messages(self, target_item: dict | None = None,
+                              prompt: str | None = None) -> list:
+        """优先拿库存里第一张真实图片测试；没图才用内嵌小红块 PNG。
+
+        target_item 指定时只用它（用途词回填），prompt 可换成轻量专用提示词。
+        """
+        data_url = f"data:image/png;base64,{_TEST_PNG_B64}"
+        pool = [target_item] if target_item is not None else self._approved_items()
+        for item in pool:
+            path = self._img_dir / str(item.get("stored_name") or "")
+            if not path.exists():
+                continue
+            try:
+                raw = await asyncio.to_thread(path.read_bytes)
+                mime = item.get("mime") or mimetypes.guess_type(str(path))[0] or "image/jpeg"
+                try:
+                    max_side = int(self.config.get("llm_max_image_side", 896) or 0)
+                except (TypeError, ValueError):
+                    max_side = 896
+                raw, mime = await asyncio.to_thread(
+                    self._prepare_image, raw, mime, max_side
+                )
+                data_url = f"data:{mime};base64,{base64.b64encode(raw).decode()}"
+                break
+            except Exception:
+                continue
+        return [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt or _PROMPT},
+                {"type": "image_url", "image_url": {"url": data_url}},
+            ],
+        }]
+
+    async def _api_model_test(self):
+        """用真实视觉打标请求测主/备模型；成功只要求返回可解析的标注 JSON。"""
+        data = await quart_request.get_json(silent=True) or {}
+        scope = str(data.get("scope") or "all").strip().lower()
+        pk = str(data.get("pk") or "").strip()
+        targets = self._llm_targets()
+        if not targets:
+            return self._err(
+                "没有可用的打标模型：先在配置引导里选主模型，或到 AstrBot「服务提供商」加一个支持图片的模型"
+            )
+        if scope == "main":
+            targets = targets[:1]
+        elif scope == "backup":
+            targets = targets[1:]
+        elif pk or scope not in ("all", ""):
+            wanted = pk or scope
+            targets = [t for t in targets if t["pk"] == wanted or t["model"] == wanted]
+        if not targets:
+            return self._err("没有找到要测试的模型")
+        targets = targets[:4]  # 面板一次最多测四个，避免误配后烧一堆请求
+        messages = await self._probe_messages()
+
+        async def one(tgt: dict) -> dict:
+            started = _now()
+            warning = (
+                "该模型在 AstrBot 中未声明图片能力" if tgt.get("vision") is False else ""
+            )
+            try:
+                meta, err = await asyncio.wait_for(
+                    self._try_target(
+                        {"name": "模型连通性测试"}, tgt, messages, False, probe=True
+                    ),
+                    timeout=35,
+                )
+                valid = isinstance(meta, dict) and any(
+                    k in meta for k in ("emotions", "name", "tags", "description")
+                )
+                return {
+                    "ok": bool(valid),
+                    "pk": tgt["pk"],
+                    "model": tgt["model"],
+                    "label": tgt.get("label") or tgt["model"],
+                    "elapsed": round(_now() - started, 1),
+                    "error": "" if valid else (err or "返回 JSON 缺少标注字段")[:260],
+                    "warning": warning,
+                }
+            except asyncio.TimeoutError:
+                return {
+                    "ok": False, "pk": tgt["pk"], "model": tgt["model"],
+                    "label": tgt.get("label") or tgt["model"],
+                    "elapsed": round(_now() - started, 1),
+                    "error": "测试超时（35 秒）", "warning": warning,
+                }
+            except Exception as exc:
+                return {
+                    "ok": False, "pk": tgt["pk"], "model": tgt["model"],
+                    "label": tgt.get("label") or tgt["model"],
+                    "elapsed": round(_now() - started, 1),
+                    "error": f"{type(exc).__name__}: {exc}"[:260],
+                    "warning": warning,
+                }
+
+        results = await asyncio.gather(*(one(t) for t in targets))
+        ok = any(r["ok"] for r in results)
+        all_ok = all(r["ok"] for r in results)
+        passed = [r["model"] for r in results if r["ok"]]
+        message = (
+            f"模型测试通过：{', '.join(passed)}"
+            if ok else "模型测试失败：请看下面的逐项错误"
+        )
+        return self._ok({
+            "ok": ok,
+            "all_ok": all_ok,
+            "message": message,
+            "results": results,
+        })
 
     # ---------- 生命周期 ----------
 
